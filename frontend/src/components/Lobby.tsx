@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import type { Meeting } from '../types';
+import { API_URL } from '../config';
 import { Video, VideoOff, Mic, MicOff, User, ArrowLeft, ArrowRight, ShieldAlert } from 'lucide-react';
 
 interface LobbyProps {
@@ -20,7 +21,7 @@ export function Lobby({ meetId, onJoin, onBack }: LobbyProps) {
 
   // Fetch meeting metadata
   useEffect(() => {
-    fetch(`http://localhost:8000/api/meetings/${meetId}`)
+    fetch(`${API_URL}/api/meetings/${meetId}`)
       .then((res) => {
         if (res.ok) return res.json();
         throw new Error('Meeting not found');

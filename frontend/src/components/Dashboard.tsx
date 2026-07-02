@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import type { Meeting } from '../types';
+import { API_URL, UPLOADS_URL } from '../config';
 import { Video, Award, Clock, Play, Plus, Link as LinkIcon } from 'lucide-react';
 
 interface DashboardProps {
@@ -19,7 +20,7 @@ export function Dashboard({ onJoinMeeting }: DashboardProps) {
   const fetchMeetings = async () => {
     try {
       setLoading(true);
-      const response = await fetch('http://localhost:8000/api/meetings');
+      const response = await fetch(`${API_URL}/api/meetings`);
       if (response.ok) {
         const data = await response.json();
         setMeetings(data);
@@ -110,7 +111,7 @@ export function Dashboard({ onJoinMeeting }: DashboardProps) {
                       <>
                         {meet.recording_url && (
                           <a 
-                            href={`http://localhost:8000${meet.recording_url}`} 
+                            href={`${UPLOADS_URL}${meet.recording_url}`} 
                             target="_blank" 
                             rel="noopener noreferrer" 
                             className="btn-secondary" 

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import type { Message } from '../types';
+import { API_URL, WS_URL } from '../config';
 import { useRecording } from '../hooks/useRecording';
 import { 
   Mic, MicOff, Video as VideoIcon, VideoOff, 
@@ -190,7 +191,7 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
   useEffect(() => {
     if (!localStream) return;
 
-    const wsUrl = `ws://localhost:8000/api/ws/meet/${meetId}?username=${encodeURIComponent(displayName)}`;
+    const wsUrl = `${WS_URL}/api/ws/meet/${meetId}?username=${encodeURIComponent(displayName)}`;
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
@@ -505,7 +506,7 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
     
     // 2. Post attendance details
     try {
-      await fetch(`http://localhost:8000/api/meetings/${meetId}/attendance`, {
+      await fetch(`${API_URL}/api/meetings/${meetId}/attendance`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

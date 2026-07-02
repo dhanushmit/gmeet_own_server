@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import { API_URL } from '../config';
 
 interface UseRecordingProps {
   meetId: string;
@@ -88,7 +89,7 @@ export function useRecording({ meetId, onSystemMessage }: UseRecordingProps) {
     formData.append('file', blob, `recording_${meetId}.webm`);
 
     try {
-      const response = await fetch(`http://localhost:8000/api/meetings/${meetId}/upload-recording`, {
+      const response = await fetch(`${API_URL}/api/meetings/${meetId}/upload-recording`, {
         method: 'POST',
         body: formData,
       });
