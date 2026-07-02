@@ -100,7 +100,7 @@ async def upload_recording(meet_id: str, file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="No file uploaded")
 
     # Define filename and destination path
-    filename = f"recording_{meet_id}.webm"
+    filename = f"recording_{meet_id}.mp4"
     dest_path = os.path.join(UPLOAD_DIR, filename)
 
     # Save the file
