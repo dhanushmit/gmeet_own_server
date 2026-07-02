@@ -1,0 +1,29 @@
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+frontend/*.local
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+
+# Python
+backend/__pycache__/
+backend/*.pyc
+backend/*.pyo
+backend/*.pyd
+backend/.Python
+backend/env/
+backend/venv/
+backend/.venv/
+
+# DB and Uploads
+backend/meetings.db
+backend/uploads/recording_*.webm
+backend/uploads/*.webm
+backend/uploads/recording_*.mp4
+backend/uploads/*.mp4
+
+# System files
+.DS_Store
+Thumbs.db
