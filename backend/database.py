@@ -11,6 +11,8 @@ def get_db_connection():
 def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
+    
+    # Create meetings table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS meetings (
             id TEXT PRIMARY KEY,
@@ -20,20 +22,29 @@ def init_db():
             recording_url TEXT,
             attendance_status TEXT DEFAULT 'Absent',
             attendance_duration INTEGER DEFAULT 0,
-            status TEXT DEFAULT 'Scheduled'
+            status TEXT DEFAULT 'Scheduled',
+            scheduled_time TEXT
         )
     """)
     conn.commit()
+
+    # Migration for existing databases that might not have scheduled_time
+    try:
+        cursor.execute("ALTER TABLE meetings ADD COLUMN scheduled_time TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        # Column already exists, ignore error
+        pass
 
     # Seed some mock data if empty
     cursor.execute("SELECT COUNT(*) FROM meetings")
     if cursor.fetchone()[0] == 0:
         cursor.execute("""
-            INSERT INTO meetings (id, title, position_domain, round_name, status)
+            INSERT INTO meetings (id, title, position_domain, round_name, status, scheduled_time)
             VALUES 
-            ('react-senior-01', 'Senior React Engineer Interview', 'Frontend Engineering', 'Technical Architecture & Live Coding', 'Scheduled'),
-            ('vite-perf-02', 'Vite Core Performance Specialist', 'Build Systems & Tooling', 'System Design & Troubleshooting', 'Scheduled'),
-            ('ai-chat-03', 'AI Engineer Mock Interview', 'Artificial Intelligence', 'Coding & ML Fundamentals', 'Scheduled')
+            ('react-senior-01', 'Senior React Engineer Interview', 'Frontend Engineering', 'Technical Architecture & Live Coding', 'Scheduled', '2026-07-05T10:00'),
+            ('vite-perf-02', 'Vite Core Performance Specialist', 'Build Systems & Tooling', 'System Design & Troubleshooting', 'Scheduled', '2026-07-06T14:30'),
+            ('ai-chat-03', 'AI Engineer Mock Interview', 'Artificial Intelligence', 'Coding & ML Fundamentals', 'Scheduled', '2026-07-07T09:00')
         """)
         conn.commit()
     conn.close()

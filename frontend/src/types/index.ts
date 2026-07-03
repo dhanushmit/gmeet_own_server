@@ -6,6 +6,7 @@ export interface Meeting {
   recording_url?: string;
   attendance_status: string;
   attendance_duration: number;
+  scheduled_time?: string;
   status: 'Scheduled' | 'Completed';
 }
 

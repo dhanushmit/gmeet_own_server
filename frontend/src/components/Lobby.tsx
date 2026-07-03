@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import type { Meeting } from '../types';
 import { API_URL } from '../config';
-import { Video, VideoOff, Mic, MicOff, User, ArrowLeft, ArrowRight, ShieldAlert } from 'lucide-react';
+import { Video, VideoOff, Mic, MicOff, User, ArrowLeft, ArrowRight, ShieldAlert, Lock } from 'lucide-react';
 
 interface LobbyProps {
   meetId: string;
-  onJoin: (displayName: string, videoEnabled: boolean, audioEnabled: boolean, autoPilot: boolean) => void;
+  onJoin: (displayName: string, videoEnabled: boolean, audioEnabled: boolean, autoPilot: boolean, role: 'admin' | 'candidate') => void;
   onBack: () => void;
 }
 
@@ -15,6 +15,12 @@ export function Lobby({ meetId, onJoin, onBack }: LobbyProps) {
   const [videoEnabled, setVideoEnabled] = useState(true);
   const [audioEnabled, setAudioEnabled] = useState(true);
   const [autoPilot, setAutoPilot] = useState(false);
+  
+  // New States for Roles and Waiting room
+  const [joinRole, setJoinRole] = useState<'candidate' | 'admin'>('candidate');
+  const [adminPassword, setAdminPassword] = useState('');
+  const [adminError, setAdminError] = useState<string | null>(null);
+
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [permissionError, setPermissionError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -72,7 +78,7 @@ export function Lobby({ meetId, onJoin, onBack }: LobbyProps) {
       } catch (err) {
         console.error('Error accessing media devices:', err);
         setPermissionError(
-          'Could not access camera or microphone. Please check your browser permissions and ensure no other application is using them.'
+          'Could not access camera or microphone. Please check your browser permissions.'
         );
       }
     }
@@ -89,19 +95,26 @@ export function Lobby({ meetId, onJoin, onBack }: LobbyProps) {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!displayName.trim()) return;
+
+    if (joinRole === 'admin' && adminPassword !== 'admin') {
+      setAdminError('Invalid host password.');
+      return;
+    }
     
+    setAdminError(null);
+
     // Stop local stream so it can be re-initialized in the meeting room
     if (stream) {
       stream.getTracks().forEach((track) => track.stop());
     }
     
-    onJoin(displayName.trim(), videoEnabled, audioEnabled, autoPilot);
+    onJoin(displayName.trim(), videoEnabled, audioEnabled, autoPilot, joinRole);
   };
 
   return (
     <div className="app-container" style={{ maxWidth: '900px' }}>
       <button onClick={onBack} className="btn-secondary" style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', marginBottom: '24px' }}>
-        <ArrowLeft size={16} /> Back to Dashboard
+        <ArrowLeft size={16} /> Back
       </button>
 
       <h2 style={{ fontSize: '1.8rem', fontWeight: 700, marginBottom: '24px' }}>Pre-join Lobby</h2>
@@ -181,9 +194,25 @@ export function Lobby({ meetId, onJoin, onBack }: LobbyProps) {
           )}
 
           <div className="glass-panel" style={{ padding: '24px' }}>
+            {adminError && (
+              <div style={{
+                background: 'rgba(239, 68, 68, 0.1)',
+                border: '1px solid var(--danger)',
+                borderRadius: '8px',
+                padding: '10px',
+                marginBottom: '16px',
+                fontSize: '0.8rem',
+                color: 'var(--danger)',
+                textAlign: 'center'
+              }}>
+                {adminError}
+              </div>
+            )}
+
             <form onSubmit={handleSubmit}>
-              <div style={{ marginBottom: '20px' }}>
-                <label style={{ display: 'block', fontSize: '0.9rem', color: 'var(--text-secondary)', marginBottom: '8px', fontWeight: 500 }}>
+              {/* Display Name Input */}
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '8px', fontWeight: 500 }}>
                   Enter Display Name
                 </label>
                 <div style={{ position: 'relative' }}>
@@ -199,19 +228,99 @@ export function Lobby({ meetId, onJoin, onBack }: LobbyProps) {
                 </div>
               </div>
 
-              <div style={{ marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '12px', background: 'rgba(99, 102, 241, 0.05)', border: '1px solid var(--glass-border)', padding: '12px', borderRadius: '8px' }}>
-                <input 
-                  type="checkbox" 
-                  id="autoPilotToggle" 
-                  checked={autoPilot} 
-                  onChange={(e) => setAutoPilot(e.target.checked)} 
-                  style={{ width: '18px', height: '18px', cursor: 'pointer' }}
-                />
-                <label htmlFor="autoPilotToggle" style={{ fontSize: '0.85rem', color: 'var(--text-primary)', cursor: 'pointer', flex: 1 }}>
-                  <strong style={{ display: 'block', color: 'var(--success)' }}>Enable Auto-Pilot Mode</strong>
-                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Automates recording, AI peer, and uploads.</span>
+              {/* Role Selection Segmented Toggles */}
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '8px', fontWeight: 500 }}>
+                  Join Meeting As
                 </label>
+                <div style={{
+                  display: 'flex',
+                  background: 'rgba(0, 0, 0, 0.3)',
+                  border: '1px solid var(--glass-border)',
+                  borderRadius: '8px',
+                  padding: '4px'
+                }}>
+                  <button
+                    type="button"
+                    onClick={() => { setJoinRole('candidate'); setAdminError(null); }}
+                    style={{
+                      flex: 1,
+                      padding: '8px 0',
+                      borderRadius: '6px',
+                      fontSize: '0.85rem',
+                      background: joinRole === 'candidate' ? 'var(--primary)' : 'transparent',
+                      color: '#fff',
+                      fontWeight: 600
+                    }}
+                  >
+                    Candidate (Guest)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setJoinRole('admin')}
+                    style={{
+                      flex: 1,
+                      padding: '8px 0',
+                      borderRadius: '6px',
+                      fontSize: '0.85rem',
+                      background: joinRole === 'admin' ? 'var(--primary)' : 'transparent',
+                      color: '#fff',
+                      fontWeight: 600
+                    }}
+                  >
+                    Admin (Host)
+                  </button>
+                </div>
               </div>
+
+              {/* Admin Password Gate */}
+              {joinRole === 'admin' && (
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '8px', fontWeight: 500 }}>
+                    Admin Password
+                  </label>
+                  <div style={{ position: 'relative' }}>
+                    <Lock size={18} style={{ position: 'absolute', left: '14px', top: '14px', color: 'var(--text-muted)' }} />
+                    <input 
+                      type="password" 
+                      placeholder="Enter host password" 
+                      value={adminPassword} 
+                      onChange={(e) => setAdminPassword(e.target.value)} 
+                      style={{ 
+                        paddingLeft: '44px',
+                        width: '100%',
+                        padding: '12px 16px',
+                        background: 'rgba(0, 0, 0, 0.3)',
+                        border: '1px solid var(--glass-border)',
+                        borderRadius: '8px',
+                        color: 'var(--text-primary)',
+                        fontFamily: 'var(--font-family)',
+                        fontSize: '1rem',
+                        outline: 'none',
+                        transition: 'var(--transition-smooth)'
+                      }}
+                      required
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Auto Pilot option only for Candidates */}
+              {joinRole === 'candidate' && (
+                <div style={{ marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '12px', background: 'rgba(99, 102, 241, 0.05)', border: '1px solid var(--glass-border)', padding: '12px', borderRadius: '8px' }}>
+                  <input 
+                    type="checkbox" 
+                    id="autoPilotToggle" 
+                    checked={autoPilot} 
+                    onChange={(e) => setAutoPilot(e.target.checked)} 
+                    style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                  />
+                  <label htmlFor="autoPilotToggle" style={{ fontSize: '0.85rem', color: 'var(--text-primary)', cursor: 'pointer', flex: 1 }}>
+                    <strong style={{ display: 'block', color: 'var(--success)' }}>Enable Auto-Pilot Mode</strong>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Automates recording, AI peer, and uploads.</span>
+                  </label>
+                </div>
+              )}
 
               <button 
                 type="submit" 

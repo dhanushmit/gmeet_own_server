@@ -4,7 +4,7 @@ import { API_URL, WS_URL } from '../config';
 import { useRecording } from '../hooks/useRecording';
 import { 
   Mic, MicOff, Video as VideoIcon, VideoOff, 
-  MessageSquare, PhoneOff, Send, Cpu, Sparkles 
+  MessageSquare, PhoneOff, Send, Cpu, Sparkles, Check, X, ShieldAlert, Clock 
 } from 'lucide-react';
 
 interface MeetingRoomProps {
@@ -13,6 +13,7 @@ interface MeetingRoomProps {
   initialVideo: boolean;
   initialAudio: boolean;
   autoPilot: boolean;
+  role: 'admin' | 'candidate';
   onLeave: () => void;
 }
 
@@ -24,7 +25,7 @@ const AI_QUESTIONS = [
   "Perfect. Those are all the technical questions I have. Do you have any questions for me about the team, the company, or the position before we wrap up?"
 ];
 
-export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, autoPilot, onLeave }: MeetingRoomProps) {
+export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, autoPilot, role, onLeave }: MeetingRoomProps) {
   // Call States
   const [videoEnabled, setVideoEnabled] = useState(initialVideo);
   const [audioEnabled, setAudioEnabled] = useState(initialAudio);
@@ -32,6 +33,9 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   
   // Connection and Room States
+  const [isAdmitted, setIsAdmitted] = useState(role === 'admin');
+  const [waitingCandidates, setWaitingCandidates] = useState<string[]>([]);
+  const [isKickedOut, setIsKickedOut] = useState(false);
   const [peers, setPeers] = useState<string[]>([]); // Usernames of other peers
   const [showChat, setShowChat] = useState(true);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -191,7 +195,7 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
   useEffect(() => {
     if (!localStream) return;
 
-    const wsUrl = `${WS_URL}/api/ws/meet/${meetId}?username=${encodeURIComponent(displayName)}`;
+    const wsUrl = `${WS_URL}/api/ws/meet/${meetId}?username=${encodeURIComponent(displayName)}&role=${role}`;
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
@@ -205,18 +209,38 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
       console.log('WS Message received:', data.type);
 
       switch (data.type) {
+        case 'waiting-state':
+          setIsAdmitted(false);
+          break;
+
+        case 'waiting-list':
+          setWaitingCandidates(data.candidates || []);
+          break;
+
+        case 'admit-success':
+          setIsAdmitted(true);
+          addSystemMessage('You have been admitted to the interview by the Host.');
+          break;
+
+        case 'kick-out':
+          setIsKickedOut(true);
+          if (localStream) {
+            localStream.getTracks().forEach((track) => track.stop());
+          }
+          break;
+
         case 'peer-joined':
           addSystemMessage(`${data.sender} joined the meeting.`);
           setPeers((prev) => [...prev, data.sender]);
-          // Initiator creates WebRTC Offer
-          initiateWebRTCCall();
+          if (isAdmitted) {
+            initiateWebRTCCall();
+          }
           break;
 
         case 'peer-left':
           addSystemMessage(`${data.sender} left the meeting.`);
           setPeers((prev) => prev.filter((p) => p !== data.sender));
           setRemoteStream(null);
-          // Close WebRTC peer connection
           if (pcRef.current) {
             pcRef.current.close();
             pcRef.current = null;
@@ -224,17 +248,19 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
           break;
 
         case 'offer':
-          await handleOffer(data.offer);
+          if (isAdmitted) {
+            await handleOffer(data.offer);
+          }
           break;
 
         case 'answer':
-          if (pcRef.current) {
+          if (pcRef.current && isAdmitted) {
             await pcRef.current.setRemoteDescription(new RTCSessionDescription(data.answer));
           }
           break;
 
         case 'candidate':
-          if (pcRef.current) {
+          if (pcRef.current && isAdmitted) {
             try {
               await pcRef.current.addIceCandidate(new RTCIceCandidate(data.candidate));
             } catch (err) {
@@ -244,16 +270,18 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
           break;
 
         case 'chat-message':
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: Math.random().toString(),
-              sender: data.sender,
-              text: data.text,
-              timestamp: data.timestamp,
-              type: 'remote'
-            }
-          ]);
+          if (isAdmitted) {
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: Math.random().toString(),
+                sender: data.sender,
+                text: data.text,
+                timestamp: data.timestamp,
+                type: 'remote'
+              }
+            ]);
+          }
           break;
 
         default:
@@ -274,7 +302,7 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
     return () => {
       ws.close();
     };
-  }, [localStream, meetId, displayName]);
+  }, [localStream, meetId, displayName, isAdmitted]);
 
   // WebRTC Call Initiation
   const createPeerConnection = () => {
@@ -318,8 +346,8 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
   };
 
   const initiateWebRTCCall = async () => {
-    // Check if we are running solo interviewer mode, in which case WebRTC is not initialized
-    if (aiActive) return;
+    // Check if we are running solo interviewer mode, or not admitted, in which case WebRTC is not initialized
+    if (aiActive || !isAdmitted) return;
 
     console.log('Creating WebRTC Offer...');
     const pc = createPeerConnection();
@@ -339,7 +367,7 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
   };
 
   const handleOffer = async (offer: RTCSessionDescriptionInit) => {
-    if (aiActive) return;
+    if (aiActive || !isAdmitted) return;
 
     console.log('Handling WebRTC Offer...');
     const pc = createPeerConnection();
@@ -356,6 +384,25 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
       }
     } catch (err) {
       console.error('Error handling Offer & creating Answer:', err);
+    }
+  };
+
+  // Admin Host Action Handlers
+  const handleAdmitCandidate = (targetName: string) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        type: 'admit-peer',
+        target: targetName
+      }));
+    }
+  };
+
+  const handleRemoveCandidate = (targetName: string) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        type: 'remove-peer',
+        target: targetName
+      }));
     }
   };
 
@@ -539,6 +586,94 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
   // Single-stream if only local, dual-stream if remote or AI active
   const isDualMode = remoteStream !== null || aiActive;
 
+  if (isKickedOut) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', background: '#030712', color: '#fff', padding: '20px' }}>
+        <div className="glass-panel" style={{ maxWidth: '440px', padding: '36px', textAlign: 'center', border: '1px solid var(--danger)' }}>
+          <div style={{ width: '60px', height: '60px', borderRadius: '50%', background: 'rgba(239, 68, 68, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px auto', color: 'var(--danger)' }}>
+            <X size={32} />
+          </div>
+          <h2 style={{ fontSize: '1.5rem', fontWeight: 700, marginBottom: '12px' }}>Removed from Room</h2>
+          <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', marginBottom: '24px' }}>
+            You have been removed from the meeting by the Host, or your admission request was declined.
+          </p>
+          <button onClick={onLeave} className="btn-primary" style={{ width: '100%' }}>
+            Back to Dashboard
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isAdmitted) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', background: '#030712', overflow: 'hidden', position: 'fixed', top: 0, left: 0, zIndex: 100 }}>
+        <div style={{ height: '60px', display: 'flex', alignItems: 'center', padding: '0 24px', borderBottom: '1px solid var(--glass-border)' }}>
+          <h2 style={{ fontSize: '1.1rem', fontWeight: 600 }}>Tech-Meet Waiting Lobby</h2>
+        </div>
+        
+        <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr', gap: '40px', flex: 1, padding: '40px', maxWidth: '1000px', margin: '0 auto', alignItems: 'center' }}>
+          <div>
+            <div className="camera-preview-box" style={{ borderRadius: '16px', border: '2px solid var(--glass-border)' }}>
+              {videoEnabled && localStream ? (
+                <video 
+                  ref={localVideoRef} 
+                  autoPlay 
+                  playsInline 
+                  muted 
+                  className="camera-video"
+                  style={{ transform: 'rotateY(180deg)' }}
+                />
+              ) : (
+                <div className="camera-placeholder">
+                  <VideoOff size={48} className="text-muted" />
+                  <p>Camera is off while waiting</p>
+                </div>
+              )}
+              
+              <div className="preview-controls">
+                <button 
+                  onClick={() => setAudioEnabled(!audioEnabled)} 
+                  className={`control-btn ${!audioEnabled ? 'active' : ''}`}
+                  title={audioEnabled ? 'Mute' : 'Unmute'}
+                >
+                  {audioEnabled ? <Mic size={20} /> : <MicOff size={20} />}
+                </button>
+                <button 
+                  onClick={() => setVideoEnabled(!videoEnabled)} 
+                  className={`control-btn ${!videoEnabled ? 'active' : ''}`}
+                  title={videoEnabled ? 'Stop Video' : 'Start Video'}
+                >
+                  {videoEnabled ? <VideoIcon size={20} /> : <VideoOff size={20} />}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="glass-panel" style={{ padding: '32px', textAlign: 'center', borderLeft: '4px solid var(--warning)' }}>
+            <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '56px', height: '56px', borderRadius: '50%', background: 'rgba(245, 158, 11, 0.1)', color: 'var(--warning)', marginBottom: '20px' }}>
+              <Clock size={28} className="rec-pulse-icon" />
+            </div>
+            
+            <h3 style={{ fontSize: '1.4rem', fontWeight: 700, marginBottom: '12px' }}>Waiting to Join...</h3>
+            <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', marginBottom: '24px', lineHeight: '1.6' }}>
+              Hi <strong>{displayName}</strong>, we've notified the Host that you are waiting. Please wait a moment while they admit you.
+            </p>
+            
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+              <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--warning)', animation: 'rec-pulse 1.5s infinite' }} />
+              Connection Secure. Waiting for Host approval.
+            </div>
+
+            <button onClick={onLeave} className="btn-secondary" style={{ width: '100%', marginTop: '24px' }}>
+              Cancel & Exit
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="room-container">
       {/* Room Header */}
@@ -647,12 +782,33 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
                 /* Remote Peer WebRTC Card */
                 <div className="stream-card">
                   {remoteStream ? (
-                    <video 
-                      ref={remoteVideoRef} 
-                      autoPlay 
-                      playsInline 
-                      className="stream-video remote" 
-                    />
+                    <>
+                      <video 
+                        ref={remoteVideoRef} 
+                        autoPlay 
+                        playsInline 
+                        className="stream-video remote" 
+                      />
+                      {role === 'admin' && (
+                        <button
+                          onClick={() => handleRemoveCandidate(peers[0] || 'Remote Peer')}
+                          className="btn-primary"
+                          style={{
+                            position: 'absolute',
+                            top: '16px',
+                            right: '16px',
+                            padding: '6px 12px',
+                            fontSize: '0.75rem',
+                            background: 'var(--danger)',
+                            boxShadow: 'none',
+                            zIndex: 10,
+                            borderRadius: '4px'
+                          }}
+                        >
+                          Kick Candidate
+                        </button>
+                      )}
+                    </>
                   ) : (
                     <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#090d16', color: 'var(--text-muted)' }}>
                       <VideoOff size={40} style={{ marginBottom: '12px' }} />
@@ -677,6 +833,44 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
             </h3>
             <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{messages.length} messages</span>
           </div>
+
+          {/* Host Panel: Waiting Candidates list */}
+          {role === 'admin' && waitingCandidates.length > 0 && (
+            <div className="glass-panel" style={{ 
+              padding: '16px', 
+              margin: '16px 16px 0 16px', 
+              background: 'rgba(245, 158, 11, 0.08)', 
+              borderColor: 'rgba(245, 158, 11, 0.3)',
+              borderRadius: '8px'
+            }}>
+              <h4 style={{ fontSize: '0.85rem', color: 'var(--warning)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '10px' }}>
+                <ShieldAlert size={14} /> Waiting Lobby ({waitingCandidates.length})
+              </h4>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {waitingCandidates.map((candidateName) => (
+                  <div key={candidateName} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.2)', padding: '6px 10px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.03)' }}>
+                    <span style={{ fontSize: '0.85rem', fontWeight: 500 }}>{candidateName}</span>
+                    <div style={{ display: 'flex', gap: '6px' }}>
+                      <button 
+                        onClick={() => handleAdmitCandidate(candidateName)}
+                        style={{ width: '26px', height: '26px', borderRadius: '50%', background: 'var(--success)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', padding: 0 }}
+                        title="Admit Candidate"
+                      >
+                        <Check size={14} />
+                      </button>
+                      <button 
+                        onClick={() => handleRemoveCandidate(candidateName)}
+                        style={{ width: '26px', height: '26px', borderRadius: '50%', background: 'var(--danger)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', padding: 0 }}
+                        title="Remove Candidate"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="chat-messages">
             {messages.map((msg) => (
