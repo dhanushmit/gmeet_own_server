@@ -34,6 +34,10 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
   
   // Connection and Room States
   const [isAdmitted, setIsAdmitted] = useState(role === 'admin');
+  const isAdmittedRef = useRef(isAdmitted);
+  useEffect(() => {
+    isAdmittedRef.current = isAdmitted;
+  }, [isAdmitted]);
   const [waitingCandidates, setWaitingCandidates] = useState<string[]>([]);
   const [isKickedOut, setIsKickedOut] = useState(false);
   const [peers, setPeers] = useState<string[]>([]); // Usernames of other peers
@@ -233,7 +237,7 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
           if (data.sender === displayName) break;
           addSystemMessage(`${data.sender} joined the meeting.`);
           setPeers((prev) => [...prev, data.sender]);
-          if (isAdmitted) {
+          if (isAdmittedRef.current) {
             initiateWebRTCCall();
           }
           break;
@@ -250,19 +254,19 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
           break;
 
         case 'offer':
-          if (isAdmitted) {
+          if (isAdmittedRef.current) {
             await handleOffer(data.offer);
           }
           break;
 
         case 'answer':
-          if (pcRef.current && isAdmitted) {
+          if (pcRef.current && isAdmittedRef.current) {
             await pcRef.current.setRemoteDescription(new RTCSessionDescription(data.answer));
           }
           break;
 
         case 'candidate':
-          if (pcRef.current && isAdmitted) {
+          if (pcRef.current && isAdmittedRef.current) {
             try {
               await pcRef.current.addIceCandidate(new RTCIceCandidate(data.candidate));
             } catch (err) {
@@ -272,7 +276,7 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
           break;
 
         case 'chat-message':
-          if (isAdmitted) {
+          if (isAdmittedRef.current) {
             setMessages((prev) => [
               ...prev,
               {
@@ -304,7 +308,7 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
     return () => {
       ws.close();
     };
-  }, [localStream, meetId, displayName, isAdmitted]);
+  }, [localStream, meetId, displayName]);
 
   // WebRTC Call Initiation
   const createPeerConnection = () => {
@@ -349,7 +353,7 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
 
   const initiateWebRTCCall = async () => {
     // Check if we are running solo interviewer mode, or not admitted, in which case WebRTC is not initialized
-    if (aiActive || !isAdmitted) return;
+    if (aiActive || !isAdmittedRef.current) return;
 
     console.log('Creating WebRTC Offer...');
     const pc = createPeerConnection();
@@ -369,7 +373,7 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
   };
 
   const handleOffer = async (offer: RTCSessionDescriptionInit) => {
-    if (aiActive || !isAdmitted) return;
+    if (aiActive || !isAdmittedRef.current) return;
 
     console.log('Handling WebRTC Offer...');
     const pc = createPeerConnection();
