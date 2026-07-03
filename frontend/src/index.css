@@ -753,3 +753,15 @@ button {
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(-4px); }
 }
+
+/* Mobile responsive adjustments for chat sidebar overlay */
+@media (max-width: 768px) {
+  .chat-sidebar {
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 100%;
+    z-index: 100;
+  }
+}

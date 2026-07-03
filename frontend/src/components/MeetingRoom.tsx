@@ -142,14 +142,21 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
 
   // Setup local stream
   useEffect(() => {
+    let activeStream: MediaStream | null = null;
     async function initLocalStream() {
       try {
+        // Always request both video and audio tracks to allow toggling them dynamically during the call
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: videoEnabled ? { width: 640, height: 360 } : false,
-          audio: true, // Always request audio track but mute if needed
+          video: { width: 640, height: 360 },
+          audio: true,
         });
         
-        // Apply initial mic mute settings
+        activeStream = stream;
+
+        // Apply initial configurations
+        stream.getVideoTracks().forEach(track => {
+          track.enabled = videoEnabled;
+        });
         stream.getAudioTracks().forEach(track => {
           track.enabled = audioEnabled;
         });
@@ -160,18 +167,49 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
         }
       } catch (err) {
         console.error('Error getting local stream:', err);
-        addSystemMessage('Failed to access camera/mic. Connection might be audio-only.');
+        // Fallback to audio-only if camera is blocked/unavailable
+        try {
+          const audioStream = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
+          activeStream = audioStream;
+          audioStream.getAudioTracks().forEach(track => {
+            track.enabled = audioEnabled;
+          });
+          setLocalStream(audioStream);
+        } catch (audioErr) {
+          console.error('Error getting fallback audio stream:', audioErr);
+          addSystemMessage('Failed to access camera/mic.');
+        }
       }
     }
 
     initLocalStream();
 
     return () => {
-      if (localStream) {
-        localStream.getTracks().forEach((track) => track.stop());
+      if (activeStream) {
+        activeStream.getTracks().forEach((track) => track.stop());
       }
     };
   }, []);
+
+  // Keep local video element in sync with localStream
+  useEffect(() => {
+    if (localVideoRef.current && localStream) {
+      localVideoRef.current.srcObject = localStream;
+      localVideoRef.current.play().catch(err => {
+        console.error("Error playing local video:", err);
+      });
+    }
+  }, [localStream, videoEnabled, isAdmitted]);
+
+  // Keep remote video element in sync with remoteStream
+  useEffect(() => {
+    if (remoteVideoRef.current && remoteStream) {
+      remoteVideoRef.current.srcObject = remoteStream;
+      remoteVideoRef.current.play().catch(err => {
+        console.error("Error playing remote video/audio:", err);
+      });
+    }
+  }, [remoteStream, aiActive]);
 
   // Update track state if toggled during the call
   useEffect(() => {
@@ -180,7 +218,7 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
         track.enabled = videoEnabled;
       });
     }
-  }, [videoEnabled]);
+  }, [videoEnabled, localStream]);
 
   useEffect(() => {
     if (localStream) {
@@ -188,7 +226,7 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
         track.enabled = audioEnabled;
       });
     }
-  }, [audioEnabled]);
+  }, [audioEnabled, localStream]);
 
   // Scroll to bottom of chat
   useEffect(() => {
