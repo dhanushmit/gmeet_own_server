@@ -230,6 +230,7 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
           break;
 
         case 'peer-joined':
+          if (data.sender === displayName) break;
           addSystemMessage(`${data.sender} joined the meeting.`);
           setPeers((prev) => [...prev, data.sender]);
           if (isAdmitted) {
@@ -238,6 +239,7 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
           break;
 
         case 'peer-left':
+          if (data.sender === displayName) break;
           addSystemMessage(`${data.sender} left the meeting.`);
           setPeers((prev) => prev.filter((p) => p !== data.sender));
           setRemoteStream(null);
@@ -389,20 +391,26 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
 
   // Admin Host Action Handlers
   const handleAdmitCandidate = (targetName: string) => {
+    console.log('Admitting candidate:', targetName);
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
         type: 'admit-peer',
         target: targetName
       }));
+    } else {
+      console.error('Signaling WebSocket is not open.');
     }
   };
 
   const handleRemoveCandidate = (targetName: string) => {
+    console.log('Removing candidate:', targetName);
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
         type: 'remove-peer',
         target: targetName
       }));
+    } else {
+      console.error('Signaling WebSocket is not open.');
     }
   };
 
@@ -852,18 +860,44 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
                     <span style={{ fontSize: '0.85rem', fontWeight: 500 }}>{candidateName}</span>
                     <div style={{ display: 'flex', gap: '6px' }}>
                       <button 
-                        onClick={() => handleAdmitCandidate(candidateName)}
-                        style={{ width: '26px', height: '26px', borderRadius: '50%', background: 'var(--success)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', padding: 0 }}
+                        onClick={() => { console.log('Admitting', candidateName); handleAdmitCandidate(candidateName); }}
+                        style={{ 
+                          width: '38px', 
+                          height: '38px', 
+                          borderRadius: '50%', 
+                          background: 'var(--success)', 
+                          display: 'flex', 
+                          alignItems: 'center', 
+                          justifyContent: 'center', 
+                          color: '#fff', 
+                          padding: 0,
+                          border: 'none',
+                          cursor: 'pointer',
+                          touchAction: 'manipulation'
+                        }}
                         title="Admit Candidate"
                       >
-                        <Check size={14} />
+                        <Check size={18} />
                       </button>
                       <button 
-                        onClick={() => handleRemoveCandidate(candidateName)}
-                        style={{ width: '26px', height: '26px', borderRadius: '50%', background: 'var(--danger)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', padding: 0 }}
+                        onClick={() => { console.log('Removing', candidateName); handleRemoveCandidate(candidateName); }}
+                        style={{ 
+                          width: '38px', 
+                          height: '38px', 
+                          borderRadius: '50%', 
+                          background: 'var(--danger)', 
+                          display: 'flex', 
+                          alignItems: 'center', 
+                          justifyContent: 'center', 
+                          color: '#fff', 
+                          padding: 0,
+                          border: 'none',
+                          cursor: 'pointer',
+                          touchAction: 'manipulation'
+                        }}
                         title="Remove Candidate"
                       >
-                        <X size={14} />
+                        <X size={18} />
                       </button>
                     </div>
                   </div>
