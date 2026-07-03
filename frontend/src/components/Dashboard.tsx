@@ -1,14 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import type { Meeting } from '../types';
 import { API_URL, UPLOADS_URL } from '../config';
-import { Video, Award, Clock, Play, Plus, Link as LinkIcon, LogOut, Copy, Check } from 'lucide-react';
+import { Video, Award, Clock, Play, Plus, Link as LinkIcon, Copy, Check } from 'lucide-react';
 
 interface DashboardProps {
   onJoinMeeting: (meetId: string) => void;
-  onLogout: () => void;
 }
 
-export function Dashboard({ onJoinMeeting, onLogout }: DashboardProps) {
+export function Dashboard({ onJoinMeeting }: DashboardProps) {
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -97,19 +96,6 @@ export function Dashboard({ onJoinMeeting, onLogout }: DashboardProps) {
         <div style={{ display: 'flex', gap: '12px' }}>
           <button className="btn-secondary" onClick={fetchMeetings} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <Clock size={16} /> Refresh
-          </button>
-          <button 
-            className="btn-secondary" 
-            onClick={onLogout} 
-            style={{ 
-              display: 'flex', 
-              alignItems: 'center', 
-              gap: '8px', 
-              borderColor: 'rgba(239, 68, 68, 0.4)', 
-              color: 'var(--danger)' 
-            }}
-          >
-            <LogOut size={16} /> Logout
           </button>
         </div>
       </header>

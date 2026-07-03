@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import type { Meeting } from '../types';
 import { API_URL } from '../config';
-import { Video, VideoOff, Mic, MicOff, User, ArrowLeft, ArrowRight, ShieldAlert, Lock } from 'lucide-react';
+import { Video, VideoOff, Mic, MicOff, User, ArrowLeft, ArrowRight, ShieldAlert } from 'lucide-react';
 
 interface LobbyProps {
   meetId: string;
@@ -18,8 +18,6 @@ export function Lobby({ meetId, onJoin, onBack }: LobbyProps) {
   
   // New States for Roles and Waiting room
   const [joinRole, setJoinRole] = useState<'candidate' | 'admin'>('candidate');
-  const [adminPassword, setAdminPassword] = useState('');
-  const [adminError, setAdminError] = useState<string | null>(null);
 
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [permissionError, setPermissionError] = useState<string | null>(null);
@@ -96,12 +94,7 @@ export function Lobby({ meetId, onJoin, onBack }: LobbyProps) {
     e.preventDefault();
     if (!displayName.trim()) return;
 
-    if (joinRole === 'admin' && adminPassword !== 'admin') {
-      setAdminError('Invalid host password.');
-      return;
-    }
-    
-    setAdminError(null);
+    // Removed password check
 
     // Stop local stream so it can be re-initialized in the meeting room
     if (stream) {
@@ -194,20 +187,7 @@ export function Lobby({ meetId, onJoin, onBack }: LobbyProps) {
           )}
 
           <div className="glass-panel" style={{ padding: '24px' }}>
-            {adminError && (
-              <div style={{
-                background: 'rgba(239, 68, 68, 0.1)',
-                border: '1px solid var(--danger)',
-                borderRadius: '8px',
-                padding: '10px',
-                marginBottom: '16px',
-                fontSize: '0.8rem',
-                color: 'var(--danger)',
-                textAlign: 'center'
-              }}>
-                {adminError}
-              </div>
-            )}
+            {/* Removed admin error render */}
 
             <form onSubmit={handleSubmit}>
               {/* Display Name Input */}
@@ -242,7 +222,7 @@ export function Lobby({ meetId, onJoin, onBack }: LobbyProps) {
                 }}>
                   <button
                     type="button"
-                    onClick={() => { setJoinRole('candidate'); setAdminError(null); }}
+                    onClick={() => { setJoinRole('candidate'); }}
                     style={{
                       flex: 1,
                       padding: '8px 0',
@@ -273,37 +253,7 @@ export function Lobby({ meetId, onJoin, onBack }: LobbyProps) {
                 </div>
               </div>
 
-              {/* Admin Password Gate */}
-              {joinRole === 'admin' && (
-                <div style={{ marginBottom: '20px' }}>
-                  <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '8px', fontWeight: 500 }}>
-                    Admin Password
-                  </label>
-                  <div style={{ position: 'relative' }}>
-                    <Lock size={18} style={{ position: 'absolute', left: '14px', top: '14px', color: 'var(--text-muted)' }} />
-                    <input 
-                      type="password" 
-                      placeholder="Enter host password" 
-                      value={adminPassword} 
-                      onChange={(e) => setAdminPassword(e.target.value)} 
-                      style={{ 
-                        paddingLeft: '44px',
-                        width: '100%',
-                        padding: '12px 16px',
-                        background: 'rgba(0, 0, 0, 0.3)',
-                        border: '1px solid var(--glass-border)',
-                        borderRadius: '8px',
-                        color: 'var(--text-primary)',
-                        fontFamily: 'var(--font-family)',
-                        fontSize: '1rem',
-                        outline: 'none',
-                        transition: 'var(--transition-smooth)'
-                      }}
-                      required
-                    />
-                  </div>
-                </div>
-              )}
+              {/* Removed Admin Password Gate */}
 
               {/* Auto Pilot option only for Candidates */}
               {joinRole === 'candidate' && (
