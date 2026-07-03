@@ -68,7 +68,8 @@ export function Dashboard({ onJoinMeeting }: DashboardProps) {
         setCopySuccess(false);
         fetchMeetings(); // Refresh meeting list
       } else {
-        alert('Failed to generate meeting link.');
+        const errorData = await response.json().catch(() => ({}));
+        alert(`Failed to generate meeting link: ${errorData.detail || 'Unknown server error'}`);
       }
     } catch (err) {
       console.error(err);

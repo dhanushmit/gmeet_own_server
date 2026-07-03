@@ -129,19 +129,22 @@ def get_meeting(meet_id: str):
 
 @app.post("/api/meetings")
 def create_meeting(payload: MeetingCreatePayload):
-    meet_id = f"meet-{uuid.uuid4().hex[:8]}"
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO meetings (id, title, position_domain, round_name, status, scheduled_time)
-        VALUES (?, ?, ?, ?, 'Scheduled', ?)
-    """, (meet_id, payload.title, payload.position_domain, payload.round_name, payload.scheduled_time))
-    conn.commit()
-    
-    cursor.execute("SELECT * FROM meetings WHERE id = ?", (meet_id,))
-    row = cursor.fetchone()
-    conn.close()
-    return dict(row)
+    try:
+        meet_id = f"meet-{uuid.uuid4().hex[:8]}"
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO meetings (id, title, position_domain, round_name, status, scheduled_time)
+            VALUES (?, ?, ?, ?, 'Scheduled', ?)
+        """, (meet_id, payload.title, payload.position_domain, payload.round_name, payload.scheduled_time))
+        conn.commit()
+        
+        cursor.execute("SELECT * FROM meetings WHERE id = ?", (meet_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Database error: {str(e)}")
 
 
 @app.post("/api/meetings/{meet_id}/upload-recording")
