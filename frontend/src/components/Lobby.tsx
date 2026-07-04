@@ -55,7 +55,11 @@ export function Lobby({ meetId, onJoin, onBack }: LobbyProps) {
         setPermissionError(null);
         const constraints = {
           video: videoEnabled ? { width: 640, height: 360 } : false,
-          audio: audioEnabled,
+          audio: audioEnabled ? {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          } : false,
         };
 
         if (!videoEnabled && !audioEnabled) {

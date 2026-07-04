@@ -147,9 +147,14 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
     async function initLocalStream() {
       try {
         // Always request both video and audio tracks to allow toggling them dynamically during the call
+        // Apply WebRTC noiseSuppression, echoCancellation, and autoGainControl for clean noise-free sound
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { width: 640, height: 360 },
-          audio: true,
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          },
         });
         
         activeStream = stream;
@@ -170,7 +175,14 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
         console.error('Error getting local stream:', err);
         // Fallback to audio-only if camera is blocked/unavailable
         try {
-          const audioStream = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
+          const audioStream = await navigator.mediaDevices.getUserMedia({ 
+            video: false, 
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true
+            } 
+          });
           activeStream = audioStream;
           audioStream.getAudioTracks().forEach(track => {
             track.enabled = audioEnabled;
@@ -241,7 +253,10 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
     const rec = new SpeechRecognition();
     rec.continuous = true;
     rec.interimResults = false;
-    rec.lang = 'en-US';
+    
+    // Support en-IN to optimize capturing Indian English accents with maximum accuracy, fallback to navigator.language
+    const userLang = navigator.language || 'en-IN';
+    rec.lang = userLang.startsWith('en') ? 'en-IN' : userLang;
 
     rec.onresult = (event: any) => {
       const resultIndex = event.resultIndex;
