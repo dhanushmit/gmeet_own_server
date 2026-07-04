@@ -110,6 +110,7 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
   const recordingAudioContextRef = useRef<AudioContext | null>(null);
   const recordingDestRef = useRef<MediaStreamAudioDestinationNode | null>(null);
   const recordingSourcesMapRef = useRef<{ [trackId: string]: MediaStreamAudioSourceNode }>({});
+  const recordingOscillatorRef = useRef<OscillatorNode | null>(null);
 
   const connectTrackToRecording = (track: MediaStreamTrack, peerUsername: string) => {
     if (!recordingAudioContextRef.current || !recordingDestRef.current) return;
@@ -856,6 +857,13 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
       stopRecording();
     }
 
+    if (recordingOscillatorRef.current) {
+      try {
+        recordingOscillatorRef.current.stop();
+      } catch (e) {}
+      recordingOscillatorRef.current = null;
+    }
+
     if (recordingAudioContextRef.current) {
       try {
         recordingAudioContextRef.current.close();
@@ -942,7 +950,20 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
       recordingDestRef.current = dest;
       recordingSourcesMapRef.current = {};
 
-      // 1. Connect local audio if it exists (regardless of enabled/disabled state)
+      // 1. Add a constant inaudible keep-alive oscillator signal to force MediaRecorder to write video frames immediately
+      try {
+        const oscillator = audioContext.createOscillator();
+        const gainNode = audioContext.createGain();
+        gainNode.gain.value = 0.000001; // completely inaudible
+        oscillator.connect(gainNode);
+        gainNode.connect(dest);
+        oscillator.start();
+        recordingOscillatorRef.current = oscillator;
+      } catch (err) {
+        console.warn("Could not create keep-alive oscillator", err);
+      }
+
+      // 2. Connect local audio if it exists (regardless of enabled/disabled state)
       const localAudioTracks = localStream.getAudioTracks();
       if (localAudioTracks.length > 0) {
         try {
@@ -954,7 +975,7 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
         }
       }
 
-      // 2. Connect all existing remote audio streams
+      // 3. Connect all existing remote audio streams
       Object.keys(remoteStreams).forEach((peerUsername) => {
         const remoteStr = remoteStreams[peerUsername];
         remoteStr.getAudioTracks().forEach((track) => {
@@ -962,16 +983,20 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
         });
       });
 
-      // 3. Clone localStream to preserve video metadata, replacing its audio tracks with mixed audio
-      const mixedStream = localStream.clone();
-      mixedStream.getAudioTracks().forEach((track) => mixedStream.removeTrack(track));
+      // 4. Combine original video track with mixed audio track (avoiding stream clone frame freezes)
+      const combinedTracks: MediaStreamTrack[] = [];
+      
+      const localVideoTracks = localStream.getVideoTracks();
+      if (localVideoTracks.length > 0) {
+        combinedTracks.push(localVideoTracks[0]); // original video track keeps frames active
+      }
       
       const mixedAudioTracks = dest.stream.getAudioTracks();
       if (mixedAudioTracks.length > 0) {
-        mixedStream.addTrack(mixedAudioTracks[0]);
+        combinedTracks.push(mixedAudioTracks[0]);
       }
 
-      return mixedStream;
+      return new MediaStream(combinedTracks);
     } catch (e) {
       console.error("Error creating mixed audio stream for recording:", e);
       return localStream; // Fallback to local only
@@ -981,6 +1006,12 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
   const handleRecordingToggle = () => {
     if (isRecording) {
       stopRecording();
+      if (recordingOscillatorRef.current) {
+        try {
+          recordingOscillatorRef.current.stop();
+        } catch (e) {}
+        recordingOscillatorRef.current = null;
+      }
       if (recordingAudioContextRef.current) {
         try {
           recordingAudioContextRef.current.close();
