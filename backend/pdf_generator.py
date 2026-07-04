@@ -230,7 +230,8 @@ def generate_transcript_pdf(
         fontSize=9.5,
         leading=14,
         textColor=text_dark,
-        spaceAfter=6
+        spaceAfter=6,
+        leftIndent=15
     )
 
     story = []
@@ -344,17 +345,19 @@ def generate_transcript_pdf(
         story.append(Spacer(1, 8))
         
         for speaker, data in mood_analysis.items():
+            card_story = []
+            
+            # Speaker name header
             speaker_style = ParagraphStyle(
                 'SpeakerMoodTitle',
                 parent=styles['Normal'],
                 fontName='Helvetica-Bold',
-                fontSize=10,
+                fontSize=11,
                 leading=14,
                 textColor=primary_color,
-                spaceBefore=6,
-                spaceAfter=4
+                spaceAfter=6
             )
-            story.append(Paragraph(f"Speaker: {speaker}", speaker_style))
+            card_story.append(Paragraph(f"Speaker: {speaker}", speaker_style))
             
             # Mood Table data
             mood_table_data = [
@@ -363,7 +366,7 @@ def generate_transcript_pdf(
                     Paragraph("<b>Excited</b>", meta_label_style),
                     Paragraph("<b>Neutral</b>", meta_label_style),
                     Paragraph("<b>Sad</b>", meta_label_style),
-                    Paragraph("<b>Anxious/Stressed</b>", meta_label_style)
+                    Paragraph("<b>Anxious</b>", meta_label_style)
                 ],
                 [
                     Paragraph(f"{data['happy']}%", meta_value_style),
@@ -374,7 +377,8 @@ def generate_transcript_pdf(
                 ]
             ]
             
-            mood_table = Table(mood_table_data, colWidths=[100, 100, 100, 100, 104])
+            # Set columns to fit cleanly inside the 480pt container card
+            mood_table = Table(mood_table_data, colWidths=[90, 90, 90, 90, 96])
             mood_table.setStyle(TableStyle([
                 ('BACKGROUND', (0,0), (-1,0), bg_light),
                 ('ALIGN', (0,0), (-1,-1), 'CENTER'),
@@ -383,9 +387,8 @@ def generate_transcript_pdf(
                 ('TOPPADDING', (0,0), (-1,-1), 4),
                 ('BOTTOMPADDING', (0,0), (-1,-1), 4),
             ]))
-            
-            story.append(mood_table)
-            story.append(Spacer(1, 4))
+            card_story.append(mood_table)
+            card_story.append(Spacer(1, 6))
             
             interpretation_style = ParagraphStyle(
                 'MoodInterpretation',
@@ -393,11 +396,24 @@ def generate_transcript_pdf(
                 fontName='Helvetica-Oblique',
                 fontSize=8.5,
                 leading=12,
-                textColor=colors.HexColor("#4b5563"),
-                spaceAfter=10
+                textColor=colors.HexColor("#4b5563")
             )
-            story.append(Paragraph(f"<b>Overall Tone Analysis:</b> {data['interpretation']}", interpretation_style))
-            story.append(Spacer(1, 6))
+            card_story.append(Paragraph(f"<b>Overall Tone Analysis:</b> {data['interpretation']}", interpretation_style))
+            
+            # Wrap card story inside a single-cell container table to style it as a card
+            card_table = Table([[card_story]], colWidths=[480])
+            card_table.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,-1), colors.HexColor("#fafafa")),
+                ('BOX', (0,0), (-1,-1), 0.5, border_color),
+                ('LINELEFT', (0,0), (-1,-1), 3.0, primary_color), # left accent bar
+                ('TOPPADDING', (0,0), (-1,-1), 10),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 10),
+                ('LEFTPADDING', (0,0), (-1,-1), 12),
+                ('RIGHTPADDING', (0,0), (-1,-1), 12),
+            ]))
+            
+            story.append(card_table)
+            story.append(Spacer(1, 10))
 
     # Build document
     doc.build(story)
