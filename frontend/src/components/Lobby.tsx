@@ -5,11 +5,12 @@ import { Video, VideoOff, Mic, MicOff, User, ArrowLeft, ArrowRight, ShieldAlert 
 
 interface LobbyProps {
   meetId: string;
+  initialRole?: 'admin' | 'candidate';
   onJoin: (displayName: string, videoEnabled: boolean, audioEnabled: boolean, autoPilot: boolean, role: 'admin' | 'candidate') => void;
   onBack: () => void;
 }
 
-export function Lobby({ meetId, onJoin, onBack }: LobbyProps) {
+export function Lobby({ meetId, initialRole = 'candidate', onJoin, onBack }: LobbyProps) {
   const [meeting, setMeeting] = useState<Meeting | null>(null);
   const [displayName, setDisplayName] = useState('');
   const [videoEnabled, setVideoEnabled] = useState(true);
@@ -17,7 +18,7 @@ export function Lobby({ meetId, onJoin, onBack }: LobbyProps) {
   const [autoPilot, setAutoPilot] = useState(false);
   
   // New States for Roles and Waiting room
-  const [joinRole, setJoinRole] = useState<'candidate' | 'admin'>('candidate');
+  const [joinRole, setJoinRole] = useState<'candidate' | 'admin'>(initialRole);
 
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [permissionError, setPermissionError] = useState<string | null>(null);

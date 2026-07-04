@@ -68,6 +68,7 @@ function App() {
       {view === 'lobby' && (
         <Lobby 
           meetId={selectedMeetId} 
+          initialRole={role}
           onJoin={handleLobbyJoin} 
           onBack={() => {
             setView('dashboard');
