@@ -191,7 +191,7 @@ export function Dashboard({ onJoinMeeting }: DashboardProps) {
                 transition: 'all 0.2s'
               }}
             >
-              <FileText size={18} /> Call Logs
+              <FileText size={18} /> Conversion Logs
             </button>
           </div>
           
@@ -352,6 +352,64 @@ export function Dashboard({ onJoinMeeting }: DashboardProps) {
                                 </div>
                               )}
                             </>
+                          )}
+                          
+                          {meet.transcript_pdf_url && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.75rem', color: 'var(--success)', marginTop: '4px', borderTop: '1px solid rgba(255, 255, 255, 0.05)', paddingTop: '8px' }}>
+                              <span>✓ Conversion Finished</span>
+                              <a 
+                                href={`${UPLOADS_URL}${meet.transcript_pdf_url}`} 
+                                target="_blank" 
+                                rel="noopener noreferrer"
+                                style={{ color: 'var(--primary)', textDecoration: 'underline', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '2px' }}
+                              >
+                                <FileText size={12} /> Download PDF
+                              </a>
+                            </div>
+                          )}
+                          
+                          {meet.transcript_json && (
+                            <div style={{ 
+                              marginTop: '8px', 
+                              padding: '10px', 
+                              background: 'rgba(0, 0, 0, 0.25)', 
+                              borderRadius: '4px', 
+                              borderLeft: '3px solid var(--primary)', 
+                              maxHeight: '180px', 
+                              overflowY: 'auto',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '6px'
+                            }}>
+                              <p style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', borderBottom: '1px solid rgba(255, 255, 255, 0.05)', paddingBottom: '4px', marginBottom: '2px' }}>
+                                Converted Text Transcript:
+                              </p>
+                              {(() => {
+                                try {
+                                  const parsed = JSON.parse(meet.transcript_json);
+                                  if (Array.isArray(parsed) && parsed.length > 0) {
+                                    return parsed.map((line: any, idx: number) => {
+                                      let spkColor = 'var(--primary)';
+                                      if (line.speaker?.toLowerCase().includes('ai')) {
+                                        spkColor = '#c084fc';
+                                      } else if (line.speaker?.toLowerCase() !== 'admin' && line.speaker?.toLowerCase() !== 'host') {
+                                        spkColor = '#2dd4bf';
+                                      }
+                                      return (
+                                        <div key={idx} style={{ fontSize: '0.72rem', lineHeight: '1.3', color: '#e5e7eb' }}>
+                                          <span style={{ color: 'var(--text-muted)', marginRight: '4px' }}>[{line.timestamp || '00:00'}]</span>
+                                          <span style={{ color: spkColor, fontWeight: 600 }}>{line.speaker}:</span>{' '}
+                                          <span>{line.text}</span>
+                                        </div>
+                                      );
+                                    });
+                                  }
+                                } catch (e) {
+                                  console.error("Error parsing transcript json", e);
+                                }
+                                return <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>No dialog transcribed yet.</span>;
+                              })()}
+                            </div>
                           )}
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-muted)' }}>

@@ -417,6 +417,17 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
     };
   }, [isAdmitted, localStream, audioEnabled]);
 
+  // Auto-start recording on admin join
+  useEffect(() => {
+    if (role === 'admin' && isAdmitted && localStream && !isRecording) {
+      console.log("Admin entered meeting room: auto-starting recording...");
+      const mixedStream = getMixedMeetingStream();
+      if (mixedStream) {
+        startRecording(mixedStream);
+      }
+    }
+  }, [isAdmitted, localStream, role, isRecording]);
+
   // Scroll to bottom of chat
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
