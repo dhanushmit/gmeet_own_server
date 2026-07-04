@@ -306,13 +306,42 @@ async def upload_recording(meet_id: str, background_tasks: BackgroundTasks, file
     if not file:
         raise HTTPException(status_code=400, detail="No file uploaded")
 
-    filename = f"recording_{meet_id}.webm"
-    dest_path = os.path.join(UPLOAD_DIR, filename)
+    filename_webm = f"recording_{meet_id}.webm"
+    dest_path_webm = os.path.join(UPLOAD_DIR, filename_webm)
 
-    with open(dest_path, "wb") as buffer:
+    with open(dest_path_webm, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    recording_url = f"/uploads/{filename}"
+    # Convert WebM to MP4 using FFmpeg (fast H.264 + AAC encoding)
+    filename_mp4 = f"recording_{meet_id}.mp4"
+    dest_path_mp4 = os.path.join(UPLOAD_DIR, filename_mp4)
+    
+    use_mp4 = False
+    try:
+        import subprocess
+        print(f"Converting WebM to MP4 for meeting {meet_id}...")
+        cmd = [
+            "ffmpeg", "-y", "-i", dest_path_webm,
+            "-c:v", "libx264", "-preset", "superfast",
+            "-c:a", "aac", dest_path_mp4
+        ]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if result.returncode == 0 and os.path.exists(dest_path_mp4) and os.path.getsize(dest_path_mp4) > 0:
+            print("FFmpeg conversion successful! Using MP4 file.")
+            use_mp4 = True
+            try:
+                os.remove(dest_path_webm)
+            except Exception:
+                pass
+        else:
+            print(f"FFmpeg conversion failed with code {result.returncode}. Falling back to WebM.")
+    except Exception as e:
+        print(f"FFmpeg not available or failed: {str(e)}. Falling back to WebM.")
+
+    final_filename = filename_mp4 if use_mp4 else filename_webm
+    final_path = dest_path_mp4 if use_mp4 else dest_path_webm
+    recording_url = f"/uploads/{final_filename}"
+
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
@@ -323,10 +352,10 @@ async def upload_recording(meet_id: str, background_tasks: BackgroundTasks, file
     conn.commit()
     conn.close()
 
-    # Launch background task to transcribe using Whisper
-    background_tasks.add_task(transcribe_recording_whisper_task, meet_id, dest_path)
+    # Launch background task to transcribe
+    background_tasks.add_task(transcribe_recording_whisper_task, meet_id, final_path)
 
-    return {"message": "Upload successful and Whisper transcription queued", "recording_url": recording_url}
+    return {"message": "Upload successful and transcription queued", "recording_url": recording_url}
 
 
 @app.post("/api/meetings/{meet_id}/transcribe")
