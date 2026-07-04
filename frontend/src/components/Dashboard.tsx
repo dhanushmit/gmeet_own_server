@@ -19,6 +19,7 @@ export function Dashboard({ onJoinMeeting }: DashboardProps) {
   const [scheduledTime, setScheduledTime] = useState('');
   const [generatedLink, setGeneratedLink] = useState<string | null>(null);
   const [copySuccess, setCopySuccess] = useState(false);
+  const [activeTab, setActiveTab] = useState<'scheduled' | 'logs'>('scheduled');
 
   useEffect(() => {
     fetchMeetings();
@@ -104,12 +105,49 @@ export function Dashboard({ onJoinMeeting }: DashboardProps) {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: '32px', alignItems: 'start' }}>
         {/* Left Column: Meetings list */}
         <div>
-          <h2 style={{ fontSize: '1.5rem', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <Video className="text-primary" /> Active & Scheduled Interview Rounds
-          </h2>
+          <div style={{ display: 'flex', gap: '16px', marginBottom: '24px', borderBottom: '1px solid rgba(255, 255, 255, 0.1)', paddingBottom: '12px' }}>
+            <button 
+              onClick={() => setActiveTab('scheduled')}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: activeTab === 'scheduled' ? 'var(--primary)' : 'var(--text-secondary)',
+                fontSize: '1.1rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                padding: '4px 8px',
+                borderBottom: activeTab === 'scheduled' ? '2px solid var(--primary)' : 'none',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                transition: 'all 0.2s'
+              }}
+            >
+              <Video size={18} /> Scheduled Interviews
+            </button>
+            <button 
+              onClick={() => setActiveTab('logs')}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: activeTab === 'logs' ? 'var(--primary)' : 'var(--text-secondary)',
+                fontSize: '1.1rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                padding: '4px 8px',
+                borderBottom: activeTab === 'logs' ? '2px solid var(--primary)' : 'none',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                transition: 'all 0.2s'
+              }}
+            >
+              <FileText size={18} /> Call Logs
+            </button>
+          </div>
           
           {loading ? (
-            <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-secondary)' }}>Loading scheduled meetings...</div>
+            <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-secondary)' }}>Loading meetings...</div>
           ) : error ? (
             <div className="glass-card" style={{ borderLeft: '4px solid var(--danger)', padding: '20px' }}>
               <p style={{ color: 'var(--danger)', fontWeight: 600, marginBottom: '8px' }}>Connection Error</p>
@@ -118,13 +156,17 @@ export function Dashboard({ onJoinMeeting }: DashboardProps) {
                 Retry Connection
               </button>
             </div>
-          ) : meetings.length === 0 ? (
+          ) : meetings.filter(m => activeTab === 'scheduled' ? m.status !== 'Completed' : m.status === 'Completed').length === 0 ? (
             <div className="glass-card" style={{ textAlign: 'center', padding: '40px' }}>
-              <p style={{ color: 'var(--text-secondary)' }}>No scheduled meetings found.</p>
+              <p style={{ color: 'var(--text-secondary)' }}>
+                {activeTab === 'scheduled' ? "No scheduled meetings found." : "No completed call logs found."}
+              </p>
             </div>
           ) : (
             <div className="dashboard-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}>
-              {meetings.map((meet) => (
+              {meetings
+                .filter(m => activeTab === 'scheduled' ? m.status !== 'Completed' : m.status === 'Completed')
+                .map((meet) => (
                 <div key={meet.id} className="glass-card" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'between', minHeight: '230px' }}>
                   <div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '12px' }}>
