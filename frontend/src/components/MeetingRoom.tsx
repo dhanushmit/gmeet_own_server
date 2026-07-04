@@ -107,6 +107,7 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
   const animationFrameRef = useRef<number | null>(null);
   const aiSpeakingTimeoutRef = useRef<any>(null);
   const autoPilotStartedRef = useRef(false);
+  const recordingAudioContextRef = useRef<AudioContext | null>(null);
 
   // Add system message utility
   const addSystemMessage = (text: string) => {
@@ -364,24 +365,38 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
 
     recognitionRef.current = rec;
 
-    if (isAdmitted && localStream) {
+    let restartInterval: any = null;
+    if (isAdmitted && localStream && audioEnabled) {
       try {
         rec.start();
         console.log("Speech recognition started.");
         addSystemMessage("Speech capture active.");
+
+        // Periodic restart to avoid browser SpeechRecognition freeze (keeps it highly responsive)
+        restartInterval = setInterval(() => {
+          try {
+            console.log("Periodic restart of Speech Recognition...");
+            rec.stop();
+          } catch (e) {}
+        }, 45000); // 45 seconds
       } catch (e) {
         console.error("Error starting speech recognition:", e);
       }
+    } else {
+      console.log("Speech recognition suspended (muted or waiting).");
     }
 
     return () => {
+      if (restartInterval) clearInterval(restartInterval);
       if (recognitionRef.current) {
         recognitionRef.current.onend = null;
         recognitionRef.current.onerror = null;
-        recognitionRef.current.abort();
+        try {
+          recognitionRef.current.abort();
+        } catch (e) {}
       }
     };
-  }, [isAdmitted, localStream]);
+  }, [isAdmitted, localStream, audioEnabled]);
 
   // Scroll to bottom of chat
   useEffect(() => {
@@ -805,6 +820,13 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
       stopRecording();
     }
 
+    if (recordingAudioContextRef.current) {
+      try {
+        recordingAudioContextRef.current.close();
+      } catch (e) {}
+      recordingAudioContextRef.current = null;
+    }
+
     const durationSeconds = Math.floor((Date.now() - joinTimeRef.current) / 1000);
     
     // 2. Post attendance and transcript details depending on role
@@ -870,11 +892,17 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
     try {
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
       const audioContext = new AudioCtx();
+      
+      // Resume context to avoid suspension
+      if (audioContext.state === 'suspended') {
+        audioContext.resume();
+      }
+
       const dest = audioContext.createMediaStreamDestination();
 
-      // 1. Connect local audio if it exists and audio track is enabled
+      // 1. Connect local audio if enabled
       const localAudioTracks = localStream.getAudioTracks();
-      if (localAudioTracks.length > 0) {
+      if (localAudioTracks.length > 0 && audioEnabled) {
         const localSource = audioContext.createMediaStreamSource(new MediaStream([localAudioTracks[0]]));
         localSource.connect(dest);
       }
@@ -893,29 +921,39 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
         }
       });
 
-      // 3. Create a combined media stream with local video and mixed audio
-      const combinedTracks: MediaStreamTrack[] = [];
-      
-      const localVideoTracks = localStream.getVideoTracks();
-      if (localVideoTracks.length > 0) {
-        combinedTracks.push(localVideoTracks[0]);
+      // Keep recording audio context reference alive to prevent garbage collection
+      if (recordingAudioContextRef.current) {
+        try {
+          recordingAudioContextRef.current.close();
+        } catch (e) {}
       }
+      recordingAudioContextRef.current = audioContext;
+
+      // 3. Clone localStream to preserve video metadata, replacing its audio tracks with mixed audio
+      const mixedStream = localStream.clone();
+      mixedStream.getAudioTracks().forEach((track) => mixedStream.removeTrack(track));
       
       const mixedAudioTracks = dest.stream.getAudioTracks();
       if (mixedAudioTracks.length > 0) {
-        combinedTracks.push(mixedAudioTracks[0]);
+        mixedStream.addTrack(mixedAudioTracks[0]);
       }
 
-      return new MediaStream(combinedTracks);
+      return mixedStream;
     } catch (e) {
       console.error("Error creating mixed audio stream for recording:", e);
-      return localStream; // Fallback to local only if mixing fails
+      return localStream; // Fallback to local only
     }
   };
 
   const handleRecordingToggle = () => {
     if (isRecording) {
       stopRecording();
+      if (recordingAudioContextRef.current) {
+        try {
+          recordingAudioContextRef.current.close();
+        } catch (e) {}
+        recordingAudioContextRef.current = null;
+      }
     } else {
       const mixedStream = getMixedMeetingStream();
       if (mixedStream) {
