@@ -46,6 +46,9 @@ class TranscriptLine(BaseModel):
     speaker: str
     text: str
     timestamp: str
+    elapsed_seconds: float | None = None
+    average_volume: float | None = None
+    speech_rate: float | None = None
 
 class EndMeetingPayload(BaseModel):
     attendance_duration: int
@@ -449,7 +452,20 @@ async def websocket_signaling(
                 # Only relay to/from admitted clients
                 current_info = manager.room_clients.get(meet_id, {}).get(websocket, {})
                 if current_info.get("status") == "admitted":
-                    await manager.broadcast_to_admitted(data, meet_id, sender_ws=websocket)
+                    target = data.get("target")
+                    if target and msg_type in ["offer", "answer", "candidate"]:
+                        # Direct routing for WebRTC signaling messages
+                        target_ws = None
+                        if meet_id in manager.room_clients:
+                            for ws, info in manager.room_clients[meet_id].items():
+                                if info["username"] == target and info["status"] == "admitted":
+                                    target_ws = ws
+                                    break
+                        if target_ws:
+                            await manager.send_personal_message(data, target_ws)
+                    else:
+                        # Broadcast other messages (chat, transcripts, etc.) to all other admitted clients
+                        await manager.broadcast_to_admitted(data, meet_id, sender_ws=websocket)
 
     except WebSocketDisconnect:
         current_info = manager.room_clients.get(meet_id, {}).get(websocket, {})

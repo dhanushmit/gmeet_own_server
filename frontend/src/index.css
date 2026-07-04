@@ -427,10 +427,17 @@ button {
   grid-template-columns: 1fr 1fr;
 }
 
+.multi-stream {
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
+
 @media (max-width: 768px) {
   .dual-stream {
     grid-template-columns: 1fr;
     grid-template-rows: 1fr 1fr;
+  }
+  .multi-stream {
+    grid-template-columns: 1fr;
   }
 }
 

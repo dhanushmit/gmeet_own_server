@@ -25,12 +25,38 @@ const AI_QUESTIONS = [
   "Perfect. Those are all the technical questions I have. Do you have any questions for me about the team, the company, or the position before we wrap up?"
 ];
 
+interface RemoteVideoProps {
+  stream: MediaStream;
+}
+
+function RemoteVideo({ stream }: RemoteVideoProps) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  
+  useEffect(() => {
+    if (videoRef.current) {
+      videoRef.current.srcObject = stream;
+      videoRef.current.play().catch((err) => {
+        console.error("Error playing remote video:", err);
+      });
+    }
+  }, [stream]);
+
+  return (
+    <video
+      ref={videoRef}
+      autoPlay
+      playsInline
+      className="stream-video remote"
+    />
+  );
+}
+
 export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, autoPilot, role, onLeave }: MeetingRoomProps) {
   // Call States
   const [videoEnabled, setVideoEnabled] = useState(initialVideo);
   const [audioEnabled, setAudioEnabled] = useState(initialAudio);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [remoteStreams, setRemoteStreams] = useState<{ [username: string]: MediaStream }>({});
   
   // Connection and Room States
   const [isAdmitted, setIsAdmitted] = useState(role === 'admin');
@@ -39,11 +65,20 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
     isAdmittedRef.current = isAdmitted;
   }, [isAdmitted]);
   const [waitingCandidates, setWaitingCandidates] = useState<string[]>([]);
-  const transcriptRef = useRef<{ speaker: string; text: string; timestamp: string }[]>([]);
-  const addTranscriptLine = (speaker: string, text: string, elapsed?: number) => {
+  const transcriptRef = useRef<{ speaker: string; text: string; timestamp: string; elapsed_seconds?: number; average_volume?: number; speech_rate?: number }[]>([]);
+  const speakingVolumesRef = useRef<number[]>([]);
+  const speechStartRef = useRef<number>(0);
+  const addTranscriptLine = (speaker: string, text: string, elapsed?: number, volume?: number, rate?: number) => {
     const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     const elapsedSeconds = elapsed !== undefined ? elapsed : (joinTimeRef.current ? Math.floor((Date.now() - joinTimeRef.current) / 1000) : 0);
-    const newLine = { speaker, text, timestamp, elapsed_seconds: elapsedSeconds };
+    const newLine = { 
+      speaker, 
+      text, 
+      timestamp, 
+      elapsed_seconds: elapsedSeconds,
+      average_volume: volume !== undefined ? volume : 20,
+      speech_rate: rate !== undefined ? rate : 2.5
+    };
     transcriptRef.current = [...transcriptRef.current, newLine];
   };
   const [isKickedOut, setIsKickedOut] = useState(false);
@@ -63,9 +98,8 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
 
   // Refs
   const localVideoRef = useRef<HTMLVideoElement>(null);
-  const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
-  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const pcsRef = useRef<{ [username: string]: RTCPeerConnection }>({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const joinTimeRef = useRef<number>(Date.now());
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -127,6 +161,15 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
           sum += dataArray[i];
         }
         const average = sum / bufferLength;
+        
+        // Track local speaking volumes history and start time
+        if (average > 15) {
+          if (speakingVolumesRef.current.length === 0) {
+            speechStartRef.current = Date.now();
+          }
+          speakingVolumesRef.current.push(average);
+        }
+        
         // Speaking threshold
         setIsLocalSpeaking(average > 15);
         animationFrameRef.current = requestAnimationFrame(checkVolume);
@@ -220,15 +263,7 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
     }
   }, [localStream, videoEnabled, isAdmitted]);
 
-  // Keep remote video element in sync with remoteStream
-  useEffect(() => {
-    if (remoteVideoRef.current && remoteStream) {
-      remoteVideoRef.current.srcObject = remoteStream;
-      remoteVideoRef.current.play().catch(err => {
-        console.error("Error playing remote video/audio:", err);
-      });
-    }
-  }, [remoteStream, aiActive]);
+
 
   // Update track state if toggled during the call
   useEffect(() => {
@@ -272,7 +307,20 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
           
           if (transcriptText) {
             console.log("Transcribed speech chunk:", transcriptText);
-            addTranscriptLine(displayName, transcriptText);
+            
+            // Calculate voice features
+            const vols = speakingVolumesRef.current;
+            const avgVol = vols.length > 0 ? (vols.reduce((a, b) => a + b, 0) / vols.length) : 20;
+            
+            const durationSec = speechStartRef.current > 0 ? (Date.now() - speechStartRef.current) / 1000 : 1.5;
+            const wordCount = transcriptText.split(/\s+/).length;
+            const speechRate = durationSec > 0.5 ? (wordCount / durationSec) : (wordCount / 1.5);
+            
+            // Reset refs
+            speakingVolumesRef.current = [];
+            speechStartRef.current = 0;
+
+            addTranscriptLine(displayName, transcriptText, undefined, avgVol, speechRate);
 
             // Broadcast to peer
             if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -281,7 +329,9 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
                 type: 'transcript-chunk',
                 text: transcriptText,
                 sender: displayName,
-                elapsed_seconds: elapsed
+                elapsed_seconds: elapsed,
+                average_volume: avgVol,
+                speech_rate: speechRate
               }));
             }
           }
@@ -379,9 +429,9 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
         case 'peer-joined':
           if (data.sender === displayName) break;
           addSystemMessage(`${data.sender} joined the meeting.`);
-          setPeers((prev) => [...prev, data.sender]);
+          setPeers((prev) => prev.includes(data.sender) ? prev : [...prev, data.sender]);
           if (isAdmittedRef.current) {
-            initiateWebRTCCall();
+            initiateWebRTCCall(data.sender);
           }
           break;
 
@@ -389,38 +439,55 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
           if (data.sender === displayName) break;
           addSystemMessage(`${data.sender} left the meeting.`);
           setPeers((prev) => prev.filter((p) => p !== data.sender));
-          setRemoteStream(null);
-          if (pcRef.current) {
-            pcRef.current.close();
-            pcRef.current = null;
+          setRemoteStreams((prev) => {
+            const next = { ...prev };
+            delete next[data.sender];
+            return next;
+          });
+          if (pcsRef.current[data.sender]) {
+            pcsRef.current[data.sender].close();
+            delete pcsRef.current[data.sender];
           }
           break;
 
+        case 'meeting-ended':
+          addSystemMessage('The host has ended this meeting.');
+          setTimeout(() => {
+            handleLeaveCall();
+          }, 2000);
+          break;
+
         case 'offer':
-          if (isAdmittedRef.current) {
-            await handleOffer(data.offer);
+          if (isAdmittedRef.current && data.target === displayName) {
+            await handleOffer(data.offer, data.sender);
           }
           break;
 
         case 'answer':
-          if (pcRef.current && isAdmittedRef.current) {
-            await pcRef.current.setRemoteDescription(new RTCSessionDescription(data.answer));
+          if (isAdmittedRef.current && data.target === displayName) {
+            const pc = pcsRef.current[data.sender];
+            if (pc) {
+              await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+            }
           }
           break;
 
         case 'candidate':
-          if (pcRef.current && isAdmittedRef.current) {
-            try {
-              await pcRef.current.addIceCandidate(new RTCIceCandidate(data.candidate));
-            } catch (err) {
-              console.error('Error adding ICE candidate:', err);
+          if (isAdmittedRef.current && data.target === displayName) {
+            const pc = pcsRef.current[data.sender];
+            if (pc) {
+              try {
+                await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+              } catch (err) {
+                console.error(`Error adding ICE candidate from ${data.sender}:`, err);
+              }
             }
           }
           break;
 
         case 'transcript-chunk':
           console.log("Received remote transcript chunk:", data.text);
-          addTranscriptLine(data.sender, data.text, data.elapsed_seconds);
+          addTranscriptLine(data.sender, data.text, data.elapsed_seconds, data.average_volume, data.speech_rate);
           break;
 
         case 'chat-message':
@@ -455,17 +522,25 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
 
     return () => {
       ws.close();
+      Object.keys(pcsRef.current).forEach((key) => {
+        try {
+          pcsRef.current[key].close();
+        } catch (err) {}
+      });
+      pcsRef.current = {};
     };
   }, [localStream, meetId, displayName]);
 
   // WebRTC Call Initiation
-  const createPeerConnection = () => {
+  const createPeerConnection = (targetUsername: string) => {
     const pc = new RTCPeerConnection({
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' }
       ]
     });
+
+    (pc as any).peerUsername = targetUsername;
 
     // Add local tracks to peer connection
     if (localStream) {
@@ -476,12 +551,12 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
 
     // Handle remote track
     pc.ontrack = (event) => {
-      console.log('Remote stream track received');
+      console.log(`Remote stream track received from ${targetUsername}`);
       if (event.streams && event.streams[0]) {
-        setRemoteStream(event.streams[0]);
-        if (remoteVideoRef.current) {
-          remoteVideoRef.current.srcObject = event.streams[0];
-        }
+        setRemoteStreams((prev) => ({
+          ...prev,
+          [targetUsername]: event.streams[0]
+        }));
       }
     };
 
@@ -490,21 +565,22 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
       if (event.candidate && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify({
           type: 'candidate',
-          candidate: event.candidate
+          candidate: event.candidate,
+          sender: displayName,
+          target: targetUsername
         }));
       }
     };
 
-    pcRef.current = pc;
+    pcsRef.current[targetUsername] = pc;
     return pc;
   };
 
-  const initiateWebRTCCall = async () => {
-    // Check if we are running solo interviewer mode, or not admitted, in which case WebRTC is not initialized
+  const initiateWebRTCCall = async (targetUsername: string) => {
     if (aiActive || !isAdmittedRef.current) return;
 
-    console.log('Creating WebRTC Offer...');
-    const pc = createPeerConnection();
+    console.log(`Creating WebRTC Offer for ${targetUsername}...`);
+    const pc = createPeerConnection(targetUsername);
     try {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
@@ -512,19 +588,26 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify({
           type: 'offer',
-          offer: offer
+          offer: offer,
+          sender: displayName,
+          target: targetUsername
         }));
       }
     } catch (err) {
-      console.error('Error creating Offer:', err);
+      console.error(`Error creating Offer for ${targetUsername}:`, err);
     }
   };
 
-  const handleOffer = async (offer: RTCSessionDescriptionInit) => {
+  const handleOffer = async (offer: RTCSessionDescriptionInit, senderUsername: string) => {
     if (aiActive || !isAdmittedRef.current) return;
 
-    console.log('Handling WebRTC Offer...');
-    const pc = createPeerConnection();
+    console.log(`Handling WebRTC Offer from ${senderUsername}...`);
+    if (pcsRef.current[senderUsername]) {
+      try {
+        pcsRef.current[senderUsername].close();
+      } catch (err) {}
+    }
+    const pc = createPeerConnection(senderUsername);
     try {
       await pc.setRemoteDescription(new RTCSessionDescription(offer));
       const answer = await pc.createAnswer();
@@ -533,11 +616,13 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify({
           type: 'answer',
-          answer: answer
+          answer: answer,
+          sender: displayName,
+          target: senderUsername
         }));
       }
     } catch (err) {
-      console.error('Error handling Offer & creating Answer:', err);
+      console.error(`Error handling Offer & creating Answer for ${senderUsername}:`, err);
     }
   };
 
@@ -571,11 +656,13 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
     if (aiActive) return;
     
     // Close other peer connections if active
-    if (remoteStream) setRemoteStream(null);
-    if (pcRef.current) {
-      pcRef.current.close();
-      pcRef.current = null;
-    }
+    setRemoteStreams({});
+    Object.keys(pcsRef.current).forEach((key) => {
+      try {
+        pcsRef.current[key].close();
+      } catch (err) {}
+    });
+    pcsRef.current = {};
 
     setAiActive(true);
     addSystemMessage('AI Mock Peer connected.');
@@ -720,20 +807,32 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
 
     const durationSeconds = Math.floor((Date.now() - joinTimeRef.current) / 1000);
     
-    // 2. Post attendance and transcript details
-    try {
-      console.log('Ending meeting and saving transcript logs...');
-      await fetch(`${API_URL}/api/meetings/${meetId}/end`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          attendance_duration: durationSeconds,
-          transcript: transcriptRef.current
-        })
-      });
-    } catch (e) {
-      console.error('Error saving final logs and transcript:', e);
-      // Fallback to basic attendance if end endpoint fails
+    // 2. Post attendance and transcript details depending on role
+    if (role === 'admin') {
+      try {
+        console.log('Ending meeting and saving transcript logs...');
+        
+        // Notify others that meeting has ended
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({
+            type: 'meeting-ended',
+            sender: displayName
+          }));
+        }
+
+        await fetch(`${API_URL}/api/meetings/${meetId}/end`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            attendance_duration: durationSeconds,
+            transcript: transcriptRef.current
+          })
+        });
+      } catch (e) {
+        console.error('Error saving final logs and transcript:', e);
+      }
+    } else {
+      // Candidates save their own attendance logs
       try {
         await fetch(`${API_URL}/api/meetings/${meetId}/attendance`, {
           method: 'POST',
@@ -744,7 +843,7 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
           })
         });
       } catch (err) {
-        console.error('Fallback attendance also failed:', err);
+        console.error('Candidate attendance update failed:', err);
       }
     }
 
@@ -753,21 +852,83 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
       localStream.getTracks().forEach((track) => track.stop());
     }
 
-    // 4. Leave room route back
+    // 4. Close all WebRTC peer connections
+    Object.keys(pcsRef.current).forEach((key) => {
+      try {
+        pcsRef.current[key].close();
+      } catch (err) {}
+    });
+    pcsRef.current = {};
+
+    // 5. Leave room route back
     onLeave();
+  };
+
+  const getMixedMeetingStream = () => {
+    if (!localStream) return null;
+
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      const audioContext = new AudioCtx();
+      const dest = audioContext.createMediaStreamDestination();
+
+      // 1. Connect local audio if it exists and audio track is enabled
+      const localAudioTracks = localStream.getAudioTracks();
+      if (localAudioTracks.length > 0) {
+        const localSource = audioContext.createMediaStreamSource(new MediaStream([localAudioTracks[0]]));
+        localSource.connect(dest);
+      }
+
+      // 2. Connect all remote audio streams
+      Object.keys(remoteStreams).forEach((peerUsername) => {
+        const remoteStr = remoteStreams[peerUsername];
+        const remoteAudioTracks = remoteStr.getAudioTracks();
+        if (remoteAudioTracks.length > 0) {
+          try {
+            const remoteSource = audioContext.createMediaStreamSource(new MediaStream([remoteAudioTracks[0]]));
+            remoteSource.connect(dest);
+          } catch (err) {
+            console.warn(`Could not mix audio from peer ${peerUsername}`, err);
+          }
+        }
+      });
+
+      // 3. Create a combined media stream with local video and mixed audio
+      const combinedTracks: MediaStreamTrack[] = [];
+      
+      const localVideoTracks = localStream.getVideoTracks();
+      if (localVideoTracks.length > 0) {
+        combinedTracks.push(localVideoTracks[0]);
+      }
+      
+      const mixedAudioTracks = dest.stream.getAudioTracks();
+      if (mixedAudioTracks.length > 0) {
+        combinedTracks.push(mixedAudioTracks[0]);
+      }
+
+      return new MediaStream(combinedTracks);
+    } catch (e) {
+      console.error("Error creating mixed audio stream for recording:", e);
+      return localStream; // Fallback to local only if mixing fails
+    }
   };
 
   const handleRecordingToggle = () => {
     if (isRecording) {
       stopRecording();
-    } else if (localStream) {
-      startRecording(localStream);
+    } else {
+      const mixedStream = getMixedMeetingStream();
+      if (mixedStream) {
+        startRecording(mixedStream);
+      }
     }
   };
 
   // Determine streaming layout
   // Single-stream if only local, dual-stream if remote or AI active
-  const isDualMode = remoteStream !== null || aiActive;
+  const remoteStreamKeys = Object.keys(remoteStreams);
+  const isMultiStream = remoteStreamKeys.length > 1;
+  const isDualMode = remoteStreamKeys.length === 1 || aiActive;
 
   if (isKickedOut) {
     return (
@@ -894,7 +1055,7 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
             </div>
           )}
           
-          {!aiActive && !remoteStream && (
+          {!aiActive && Object.keys(remoteStreams).length === 0 && (
             <button 
               className="btn-primary" 
               onClick={handleSimulateAI}
@@ -911,7 +1072,7 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
         
         {/* Videos Grid */}
         <div className="video-grid-wrapper">
-          <div className={`video-grid ${isDualMode ? 'dual-stream' : 'single-stream'}`}>
+          <div className={`video-grid ${isMultiStream ? 'multi-stream' : isDualMode ? 'dual-stream' : 'single-stream'}`}>
             
             {/* Local Stream Card */}
             <div className={`stream-card ${isLocalSpeaking ? 'active-speaker' : ''}`}>
@@ -936,73 +1097,71 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
             </div>
 
             {/* Remote WebRTC Stream Card OR AI Simulated Avatar Card */}
-            {isDualMode && (
-              aiActive ? (
-                /* AI Simulated Peer Card */
-                <div className={`stream-card ${isAiSpeaking ? 'active-speaker' : ''}`} style={{ borderColor: isAiSpeaking ? 'var(--success)' : 'var(--glass-border)' }}>
-                  <div className="ai-avatar-card">
-                    <div className="ai-glow-ring" style={{ boxShadow: isAiSpeaking ? '0 0 30px var(--success-glow)' : 'none' }}>
-                      <span className="ai-initials">AR</span>
-                    </div>
-                    <div className="speech-wave">
-                      <div className={`wave-bar ${isAiSpeaking ? 'speaking' : ''}`} />
-                      <div className={`wave-bar ${isAiSpeaking ? 'speaking' : ''}`} />
-                      <div className={`wave-bar ${isAiSpeaking ? 'speaking' : ''}`} />
-                      <div className={`wave-bar ${isAiSpeaking ? 'speaking' : ''}`} />
-                      <div className={`wave-bar ${isAiSpeaking ? 'speaking' : ''}`} />
-                      <div className={`wave-bar ${isAiSpeaking ? 'speaking' : ''}`} />
-                      <div className={`wave-bar ${isAiSpeaking ? 'speaking' : ''}`} />
-                    </div>
-                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <Sparkles size={12} /> AI Speech Wavebars
-                    </span>
+            {aiActive ? (
+              /* AI Simulated Peer Card */
+              <div className={`stream-card ${isAiSpeaking ? 'active-speaker' : ''}`} style={{ borderColor: isAiSpeaking ? 'var(--success)' : 'var(--glass-border)' }}>
+                <div className="ai-avatar-card">
+                  <div className="ai-glow-ring" style={{ boxShadow: isAiSpeaking ? '0 0 30px var(--success-glow)' : 'none' }}>
+                    <span className="ai-initials">AR</span>
                   </div>
-                  <div className="stream-badge">
-                    <span>AI Interviewer (Peer)</span>
+                  <div className="speech-wave">
+                    <div className={`wave-bar ${isAiSpeaking ? 'speaking' : ''}`} />
+                    <div className={`wave-bar ${isAiSpeaking ? 'speaking' : ''}`} />
+                    <div className={`wave-bar ${isAiSpeaking ? 'speaking' : ''}`} />
+                    <div className={`wave-bar ${isAiSpeaking ? 'speaking' : ''}`} />
+                    <div className={`wave-bar ${isAiSpeaking ? 'speaking' : ''}`} />
+                    <div className={`wave-bar ${isAiSpeaking ? 'speaking' : ''}`} />
+                    <div className={`wave-bar ${isAiSpeaking ? 'speaking' : ''}`} />
                   </div>
+                  <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Sparkles size={12} /> AI Speech Wavebars
+                  </span>
                 </div>
-              ) : (
-                /* Remote Peer WebRTC Card */
-                <div className="stream-card">
-                  {remoteStream ? (
-                    <>
-                      <video 
-                        ref={remoteVideoRef} 
-                        autoPlay 
-                        playsInline 
-                        className="stream-video remote" 
-                      />
-                      {role === 'admin' && (
-                        <button
-                          onClick={() => handleRemoveCandidate(peers[0] || 'Remote Peer')}
-                          className="btn-primary"
-                          style={{
-                            position: 'absolute',
-                            top: '16px',
-                            right: '16px',
-                            padding: '6px 12px',
-                            fontSize: '0.75rem',
-                            background: 'var(--danger)',
-                            boxShadow: 'none',
-                            zIndex: 10,
-                            borderRadius: '4px'
-                          }}
-                        >
-                          Kick Candidate
-                        </button>
-                      )}
-                    </>
-                  ) : (
-                    <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#090d16', color: 'var(--text-muted)' }}>
-                      <VideoOff size={40} style={{ marginBottom: '12px' }} />
-                      <span style={{ fontSize: '0.9rem' }}>Waiting for peer stream...</span>
-                    </div>
-                  )}
-                  <div className="stream-badge">
-                    <span>{peers[0] || 'Remote Peer'}</span>
-                  </div>
+                <div className="stream-badge">
+                  <span>AI Interviewer (Peer)</span>
                 </div>
-              )
+              </div>
+            ) : (
+              /* Remote Peer WebRTC Cards */
+              peers.map((peerUsername) => {
+                const stream = remoteStreams[peerUsername];
+                return (
+                  <div key={peerUsername} className="stream-card">
+                    {stream ? (
+                      <>
+                        <RemoteVideo stream={stream} />
+                        {role === 'admin' && (
+                          <button
+                            onClick={() => handleRemoveCandidate(peerUsername)}
+                            className="btn-primary"
+                            style={{
+                              position: 'absolute',
+                              top: '16px',
+                              right: '16px',
+                              padding: '6px 12px',
+                              fontSize: '0.75rem',
+                              background: 'var(--danger)',
+                              boxShadow: 'none',
+                              zIndex: 10,
+                              borderRadius: '4px'
+                            }}
+                          >
+                            Kick Candidate
+                          </button>
+                        )}
+                      </>
+                    ) : (
+                      <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#090d16', color: 'var(--text-muted)' }}>
+                        <VideoOff size={40} style={{ marginBottom: '12px' }} />
+                        <span style={{ fontSize: '0.9rem' }}>Waiting for peer stream...</span>
+                      </div>
+                    )}
+                    <div className="stream-badge">
+                      <span>{peerUsername}</span>
+                    </div>
+                  </div>
+                );
+              })
             )}
 
           </div>
