@@ -193,48 +193,55 @@ def run_transcription_and_generate_pdf(meet_id: str, file_path: str):
             print("Error parsing transcript_json:", e)
             
     # 2. Run Whisper transcription
-    model = get_whisper_model()
-    segments, info = model.transcribe(file_path, beam_size=5)
-    
     whisper_transcript = []
-    for segment in segments:
-        start_sec = segment.start
-        text = segment.text.strip()
-        if not text:
-            continue
-            
-        # Align with real-time speaker chunks using closest timestamp match
-        closest_speaker = "Speaker"
-        closest_timestamp = ""
-        min_diff = 999999.0
-        closest_volume = 20
-        closest_rate = 2.5
+    try:
+        model = get_whisper_model()
+        segments, info = model.transcribe(file_path, beam_size=5)
         
-        for chunk in transcript_list:
-            chunk_sec = chunk.get("elapsed_seconds")
-            if chunk_sec is not None:
-                diff = abs(chunk_sec - start_sec)
-                if diff < min_diff:
-                    min_diff = diff
-                    closest_speaker = chunk.get("speaker", "Speaker")
-                    closest_timestamp = chunk.get("timestamp", "")
-                    closest_volume = chunk.get("average_volume", 20)
-                    closest_rate = chunk.get("speech_rate", 2.5)
-        
-        # Formatting timestamp if missing
-        if not closest_timestamp:
-            minutes = int(start_sec) // 60
-            seconds = int(start_sec) % 60
-            closest_timestamp = f"{minutes:02d}:{seconds:02d}"
+        for segment in segments:
+            start_sec = segment.start
+            text = segment.text.strip()
+            if not text:
+                continue
+                
+            # Align with real-time speaker chunks using closest timestamp match
+            closest_speaker = "Speaker"
+            closest_timestamp = ""
+            min_diff = 999999.0
+            closest_volume = 20
+            closest_rate = 2.5
             
-        whisper_transcript.append({
-            "speaker": closest_speaker,
-            "text": text,
-            "timestamp": closest_timestamp,
-            "elapsed_seconds": start_sec,
-            "average_volume": closest_volume,
-            "speech_rate": closest_rate
-        })
+            for chunk in transcript_list:
+                chunk_sec = chunk.get("elapsed_seconds")
+                if chunk_sec is not None:
+                    diff = abs(chunk_sec - start_sec)
+                    if diff < min_diff:
+                        min_diff = diff
+                        closest_speaker = chunk.get("speaker", "Speaker")
+                        closest_timestamp = chunk.get("timestamp", "")
+                        closest_volume = chunk.get("average_volume", 20)
+                        closest_rate = chunk.get("speech_rate", 2.5)
+            
+            # Formatting timestamp if missing
+            if not closest_timestamp:
+                minutes = int(start_sec) // 60
+                seconds = int(start_sec) % 60
+                closest_timestamp = f"{minutes:02d}:{seconds:02d}"
+                
+            whisper_transcript.append({
+                "speaker": closest_speaker,
+                "text": text,
+                "timestamp": closest_timestamp,
+                "elapsed_seconds": start_sec,
+                "average_volume": closest_volume,
+                "speech_rate": closest_rate
+            })
+    except (ImportError, ModuleNotFoundError) as e:
+        print("faster_whisper module not installed. Falling back to real-time log for PDF generation.")
+        whisper_transcript = []
+    except Exception as e:
+        print(f"Whisper transcription failed: {str(e)}. Falling back to real-time log.")
+        whisper_transcript = []
         
     # If whisper successfully transcribed text, update DB and generate new PDF report
     pdf_url = None
