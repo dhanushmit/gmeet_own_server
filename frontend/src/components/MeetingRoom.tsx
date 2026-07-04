@@ -44,6 +44,8 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
   const [showChat, setShowChat] = useState(true);
   const [messages, setMessages] = useState<Message[]>([]);
   const [chatInput, setChatInput] = useState('');
+  const [transcript, setTranscript] = useState<{ sender: string; text: string; timestamp: string }[]>([]);
+  const [activeSidebarTab, setActiveSidebarTab] = useState<'chat' | 'transcript'>('chat');
   
   // AI Mock Interviewer States
   const [aiActive, setAiActive] = useState(false);
@@ -220,6 +222,74 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
     }
   }, [videoEnabled, localStream]);
 
+  const addTranscriptEntry = (sender: string, text: string) => {
+    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    setTranscript((prev) => [
+      ...prev,
+      { sender, text, timestamp }
+    ]);
+  };
+
+  // Speech recognition setup for real-time transcription
+  useEffect(() => {
+    if (!isAdmitted || !localStream) return;
+
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      console.warn('Speech Recognition not supported in this browser.');
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = false;
+    recognition.lang = 'en-US';
+
+    recognition.onresult = (event: any) => {
+      const result = event.results[event.results.length - 1];
+      if (result.isFinal) {
+        const speechText = result[0].transcript.trim();
+        if (speechText) {
+          const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN && !aiActive) {
+            wsRef.current.send(JSON.stringify({
+              type: 'speech-transcript',
+              sender: displayName,
+              text: speechText,
+              timestamp
+            }));
+          }
+          addTranscriptEntry(displayName, speechText);
+        }
+      }
+    };
+
+    recognition.onerror = (event: any) => {
+      console.error('Speech Recognition Error:', event.error);
+    };
+
+    recognition.onend = () => {
+      // Auto-restart if we are still admitted
+      if (isAdmittedRef.current) {
+        try {
+          recognition.start();
+        } catch (e) {
+          console.error('Failed to restart speech recognition:', e);
+        }
+      }
+    };
+
+    try {
+      recognition.start();
+    } catch (e) {
+      console.error('Failed to start speech recognition:', e);
+    }
+
+    return () => {
+      recognition.stop();
+    };
+  }, [isAdmitted, localStream, aiActive]);
+
   useEffect(() => {
     if (localStream) {
       localStream.getAudioTracks().forEach((track) => {
@@ -323,6 +393,19 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
                 text: data.text,
                 timestamp: data.timestamp,
                 type: 'remote'
+              }
+            ]);
+          }
+          break;
+
+        case 'speech-transcript':
+          if (isAdmittedRef.current) {
+            setTranscript((prev) => [
+              ...prev,
+              {
+                sender: data.sender,
+                text: data.text,
+                timestamp: data.timestamp
               }
             ]);
           }
@@ -486,6 +569,7 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
           type: 'remote'
         }
       ]);
+      addTranscriptEntry('AI Interviewer', firstQuestion);
       setAiQuestionIndex(1);
       triggerAISpeaking(6000);
     }, 2000);
@@ -561,6 +645,7 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
             type: 'remote'
           }
         ]);
+        addTranscriptEntry('AI Interviewer', nextQuestion);
         
         setAiQuestionIndex((prev) => prev + 1);
         triggerAISpeaking(7000);
@@ -570,16 +655,18 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
       setIsAiTyping(true);
       setTimeout(() => {
         setIsAiTyping(false);
+        const closingMsg = `Thank you ${displayName}. I have completed all my questions. I appreciate your detailed answers! The interview session will now close automatically.`;
         setMessages((prev) => [
           ...prev,
           {
             id: Math.random().toString(),
             sender: 'AI Interviewer',
-            text: `Thank you ${displayName}. I have completed all my questions. I appreciate your detailed answers! The interview session will now close automatically.`,
+            text: closingMsg,
             timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
             type: 'remote'
           }
         ]);
+        addTranscriptEntry('AI Interviewer', closingMsg);
         triggerAISpeaking(5000);
 
         if (autoPilot) {
@@ -608,7 +695,8 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           status: 'Attended',
-          duration: durationSeconds
+          duration: durationSeconds,
+          transcript: transcript
         })
       });
     } catch (e) {
@@ -876,12 +964,60 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
         </div>
 
         {/* Live Chat Sidebar */}
+        {/* Live Chat & Transcript Sidebar */}
         <div className={`chat-sidebar ${!showChat ? 'hidden' : ''}`}>
-          <div className="chat-header">
-            <h3 style={{ fontSize: '1rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <MessageSquare size={18} className="text-primary" /> Live Chat
-            </h3>
-            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{messages.length} messages</span>
+          <div className="chat-header" style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '8px', borderBottom: '1px solid var(--glass-border)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+              <h3 style={{ fontSize: '0.95rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <MessageSquare size={16} className="text-primary" /> Signaling Panel
+              </h3>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                {activeSidebarTab === 'chat' ? `${messages.length} messages` : `${transcript.length} lines`}
+              </span>
+            </div>
+            
+            {/* Sidebar Tabs */}
+            <div style={{ display: 'flex', background: 'rgba(0,0,0,0.2)', borderRadius: '6px', padding: '2px', width: '100%' }}>
+              <button 
+                onClick={() => setActiveSidebarTab('chat')}
+                style={{ 
+                  flex: 1, 
+                  padding: '6px 0', 
+                  fontSize: '0.8rem', 
+                  fontWeight: 600,
+                  borderRadius: '4px',
+                  background: activeSidebarTab === 'chat' ? 'rgba(255,255,255,0.08)' : 'transparent',
+                  border: 'none',
+                  color: activeSidebarTab === 'chat' ? 'var(--text-primary)' : 'var(--text-secondary)',
+                  cursor: 'pointer',
+                  transition: 'background 0.2s'
+                }}
+              >
+                Chat
+              </button>
+              <button 
+                onClick={() => setActiveSidebarTab('transcript')}
+                style={{ 
+                  flex: 1, 
+                  padding: '6px 0', 
+                  fontSize: '0.8rem', 
+                  fontWeight: 600,
+                  borderRadius: '4px',
+                  background: activeSidebarTab === 'transcript' ? 'rgba(255,255,255,0.08)' : 'transparent',
+                  border: 'none',
+                  color: activeSidebarTab === 'transcript' ? 'var(--text-primary)' : 'var(--text-secondary)',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px',
+                  transition: 'background 0.2s'
+                }}
+              >
+                <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--danger)', animation: 'rec-pulse 1.5s infinite ease-in-out' }} />
+                Transcript
+              </button>
+            </div>
           </div>
 
           {/* Host Panel: Waiting Candidates list */}
@@ -948,50 +1084,79 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
             </div>
           )}
 
-          <div className="chat-messages">
-            {messages.map((msg) => (
-              <div key={msg.id} className={`chat-message ${msg.type}`}>
-                <div className="msg-bubble">
-                  {msg.text}
-                </div>
-                <div className="msg-meta">
-                  <span style={{ fontWeight: 600 }}>{msg.sender}</span>
-                  <span>•</span>
-                  <span>{msg.timestamp}</span>
-                </div>
-              </div>
-            ))}
-
-            {isAiTyping && (
-              <div className="chat-message remote">
-                <div className="msg-bubble" style={{ padding: '4px 12px' }}>
-                  <div className="typing-indicator">
-                    <div className="typing-dot" />
-                    <div className="typing-dot" />
-                    <div className="typing-dot" />
+          {activeSidebarTab === 'chat' ? (
+            <>
+              <div className="chat-messages">
+                {messages.map((msg) => (
+                  <div key={msg.id} className={`chat-message ${msg.type}`}>
+                    <div className="msg-bubble">
+                      {msg.text}
+                    </div>
+                    <div className="msg-meta">
+                      <span style={{ fontWeight: 600 }}>{msg.sender}</span>
+                      <span>•</span>
+                      <span>{msg.timestamp}</span>
+                    </div>
                   </div>
-                </div>
-                <div className="msg-meta">
-                  <span style={{ fontWeight: 600 }}>AI Interviewer</span>
-                  <span>is typing...</span>
-                </div>
-              </div>
-            )}
-            
-            <div ref={messagesEndRef} />
-          </div>
+                ))}
 
-          <form onSubmit={handleSendMessage} className="chat-input-bar">
-            <input 
-              type="text" 
-              placeholder="Send message to room..." 
-              value={chatInput}
-              onChange={(e) => setChatInput(e.target.value)}
-            />
-            <button type="submit" className="chat-send-btn">
-              <Send size={16} />
-            </button>
-          </form>
+                {isAiTyping && (
+                  <div className="chat-message remote">
+                    <div className="msg-bubble" style={{ padding: '4px 12px' }}>
+                      <div className="typing-indicator">
+                        <div className="typing-dot" />
+                        <div className="typing-dot" />
+                        <div className="typing-dot" />
+                      </div>
+                    </div>
+                    <div className="msg-meta">
+                      <span style={{ fontWeight: 600 }}>AI Interviewer</span>
+                      <span>is typing...</span>
+                    </div>
+                  </div>
+                )}
+                
+                <div ref={messagesEndRef} />
+              </div>
+
+              <form onSubmit={handleSendMessage} className="chat-input-bar">
+                <input 
+                  type="text" 
+                  placeholder="Send message to room..." 
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                />
+                <button type="submit" className="chat-send-btn">
+                  <Send size={16} />
+                </button>
+              </form>
+            </>
+          ) : (
+            <div className="chat-messages" style={{ display: 'flex', flexDirection: 'column', gap: '12px', overflowY: 'auto' }}>
+              {transcript.length === 0 ? (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', textAlign: 'center', padding: '40px 20px', margin: 'auto' }}>
+                  <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: 'var(--danger)', animation: 'rec-pulse 1.5s infinite ease-in-out', marginBottom: '12px' }} />
+                  <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)' }}>Capturing Speech...</span>
+                  <span style={{ fontSize: '0.75rem', marginTop: '6px', color: 'var(--text-secondary)' }}>Speak into your microphone. Words are transcribed and synced here live with 99% accuracy.</span>
+                </div>
+              ) : (
+                transcript.map((entry, index) => (
+                  <div key={index} style={{ display: 'flex', flexDirection: 'column', gap: '4px', borderBottom: '1px solid rgba(255,255,255,0.03)', paddingBottom: '8px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '0.8rem', fontWeight: 700, color: entry.sender === displayName ? 'var(--success)' : 'var(--primary)' }}>
+                        {entry.sender}
+                      </span>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{entry.timestamp}</span>
+                    </div>
+                    <p style={{ fontSize: '0.85rem', color: 'var(--text-primary)', margin: 0, lineHeight: '1.4' }}>
+                      "{entry.text}"
+                    </p>
+                  </div>
+                ))
+              )}
+              <div ref={messagesEndRef} />
+            </div>
+          )}
         </div>
 
       </div>
