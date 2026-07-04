@@ -39,7 +39,12 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
     isAdmittedRef.current = isAdmitted;
   }, [isAdmitted]);
   const [waitingCandidates, setWaitingCandidates] = useState<string[]>([]);
-  const [meetingTranscript, setMeetingTranscript] = useState<{ speaker: string; text: string; timestamp: string }[]>([]);
+  const transcriptRef = useRef<{ speaker: string; text: string; timestamp: string }[]>([]);
+  const addTranscriptLine = (speaker: string, text: string) => {
+    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const newLine = { speaker, text, timestamp };
+    transcriptRef.current = [...transcriptRef.current, newLine];
+  };
   const [isKickedOut, setIsKickedOut] = useState(false);
   const [peers, setPeers] = useState<string[]>([]); // Usernames of other peers
   const [showChat, setShowChat] = useState(true);
@@ -259,27 +264,23 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
     rec.lang = userLang.startsWith('en') ? 'en-IN' : userLang;
 
     rec.onresult = (event: any) => {
-      const resultIndex = event.resultIndex;
-      if (event.results[resultIndex] && event.results[resultIndex].isFinal) {
-        const transcriptText = event.results[resultIndex][0].transcript.trim();
-        
-        if (transcriptText) {
-          console.log("Transcribed local speech:", transcriptText);
-          const timestampStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      // Loop through all new results to ensure no speech chunks are lost (solves empty/skipped chunks)
+      for (let i = event.resultIndex; i < event.results.length; ++i) {
+        if (event.results[i].isFinal) {
+          const transcriptText = event.results[i][0].transcript.trim();
           
-          // 1. Add to local transcript log
-          setMeetingTranscript((prev) => [
-            ...prev,
-            { speaker: displayName, text: transcriptText, timestamp: timestampStr }
-          ]);
+          if (transcriptText) {
+            console.log("Transcribed speech chunk:", transcriptText);
+            addTranscriptLine(displayName, transcriptText);
 
-          // 2. Broadcast to peer
-          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-            wsRef.current.send(JSON.stringify({
-              type: 'transcript-chunk',
-              text: transcriptText,
-              sender: displayName
-            }));
+            // Broadcast to peer
+            if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+              wsRef.current.send(JSON.stringify({
+                type: 'transcript-chunk',
+                text: transcriptText,
+                sender: displayName
+              }));
+            }
           }
         }
       }
@@ -287,7 +288,8 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
 
     rec.onerror = (err: any) => {
       console.error("Speech Recognition error:", err.error);
-      if (err.error === 'network' || err.error === 'aborted') {
+      addSystemMessage("Speech capture warning: " + err.error);
+      if (err.error === 'network' || err.error === 'aborted' || err.error === 'no-speech') {
         setTimeout(() => {
           try {
             if (isAdmittedRef.current && !isKickedOut) rec.start();
@@ -297,6 +299,7 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
     };
 
     rec.onend = () => {
+      console.log("Speech Recognition session ended.");
       setTimeout(() => {
         try {
           if (isAdmittedRef.current && !isKickedOut) {
@@ -312,6 +315,7 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
       try {
         rec.start();
         console.log("Speech recognition started.");
+        addSystemMessage("Speech capture active.");
       } catch (e) {
         console.error("Error starting speech recognition:", e);
       }
@@ -412,11 +416,8 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
           break;
 
         case 'transcript-chunk':
-          const chunkTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-          setMeetingTranscript((prev) => [
-            ...prev,
-            { speaker: data.sender, text: data.text, timestamp: chunkTime }
-          ]);
+          console.log("Received remote transcript chunk:", data.text);
+          addTranscriptLine(data.sender, data.text);
           break;
 
         case 'chat-message':
@@ -593,11 +594,7 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
         }
       ]);
       
-      const timestampStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      setMeetingTranscript((prev) => [
-        ...prev,
-        { speaker: 'AI Interviewer', text: firstQuestion, timestamp: timestampStr }
-      ]);
+      addTranscriptLine('AI Interviewer', firstQuestion);
       
       setAiQuestionIndex(1);
       triggerAISpeaking(6000);
@@ -675,11 +672,7 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
           }
         ]);
         
-        const timestampStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        setMeetingTranscript((prev) => [
-          ...prev,
-          { speaker: 'AI Interviewer', text: nextQuestion, timestamp: timestampStr }
-        ]);
+        addTranscriptLine('AI Interviewer', nextQuestion);
         
         setAiQuestionIndex((prev) => prev + 1);
         triggerAISpeaking(7000);
@@ -701,11 +694,7 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
           }
         ]);
         
-        const timestampStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        setMeetingTranscript((prev) => [
-          ...prev,
-          { speaker: 'AI Interviewer', text: completionText, timestamp: timestampStr }
-        ]);
+        addTranscriptLine('AI Interviewer', completionText);
         
         triggerAISpeaking(5000);
 
@@ -736,7 +725,7 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           attendance_duration: durationSeconds,
-          transcript: meetingTranscript
+          transcript: transcriptRef.current
         })
       });
     } catch (e) {
