@@ -40,9 +40,10 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
   }, [isAdmitted]);
   const [waitingCandidates, setWaitingCandidates] = useState<string[]>([]);
   const transcriptRef = useRef<{ speaker: string; text: string; timestamp: string }[]>([]);
-  const addTranscriptLine = (speaker: string, text: string) => {
+  const addTranscriptLine = (speaker: string, text: string, elapsed?: number) => {
     const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    const newLine = { speaker, text, timestamp };
+    const elapsedSeconds = elapsed !== undefined ? elapsed : (joinTimeRef.current ? Math.floor((Date.now() - joinTimeRef.current) / 1000) : 0);
+    const newLine = { speaker, text, timestamp, elapsed_seconds: elapsedSeconds };
     transcriptRef.current = [...transcriptRef.current, newLine];
   };
   const [isKickedOut, setIsKickedOut] = useState(false);
@@ -275,10 +276,12 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
 
             // Broadcast to peer
             if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+              const elapsed = joinTimeRef.current ? Math.floor((Date.now() - joinTimeRef.current) / 1000) : 0;
               wsRef.current.send(JSON.stringify({
                 type: 'transcript-chunk',
                 text: transcriptText,
-                sender: displayName
+                sender: displayName,
+                elapsed_seconds: elapsed
               }));
             }
           }
@@ -417,7 +420,7 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
 
         case 'transcript-chunk':
           console.log("Received remote transcript chunk:", data.text);
-          addTranscriptLine(data.sender, data.text);
+          addTranscriptLine(data.sender, data.text, data.elapsed_seconds);
           break;
 
         case 'chat-message':
