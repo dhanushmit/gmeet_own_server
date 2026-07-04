@@ -8,8 +8,8 @@ export interface Meeting {
   attendance_duration: number;
   scheduled_time?: string;
   status: 'Scheduled' | 'Completed';
-  transcript?: string;
-  pdf_url?: string;
+  transcript_pdf_url?: string;
+  transcript_json?: string;
 }
 
 export interface Message {

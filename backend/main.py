@@ -7,13 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from database import init_db, get_db_connection
-
-# ReportLab imports for generating beautiful PDF transcripts
-from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib import colors
-from reportlab.lib.units import inch
+from pdf_generator import generate_transcript_pdf
 
 # Initialize database on startup
 init_db()
@@ -37,169 +31,25 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 
-# Function to generate styled PDF transcript of the meeting
-def generate_transcript_pdf(meet_id: str, meet: dict, transcript: list) -> str:
-    pdf_filename = f"transcript_{meet_id}.pdf"
-    pdf_path = os.path.join(UPLOAD_DIR, pdf_filename)
-    
-    # Setup document
-    doc = SimpleDocTemplate(pdf_path, pagesize=letter, rightMargin=54, leftMargin=54, topMargin=54, bottomMargin=54)
-    story = []
-    
-    styles = getSampleStyleSheet()
-    
-    # Custom styles
-    title_style = ParagraphStyle(
-        'DocTitle',
-        parent=styles['Heading1'],
-        fontName='Helvetica-Bold',
-        fontSize=22,
-        leading=26,
-        textColor=colors.HexColor('#1E293B'),
-        spaceAfter=15
-    )
-    
-    section_heading = ParagraphStyle(
-        'SectionHeading',
-        parent=styles['Heading2'],
-        fontName='Helvetica-Bold',
-        fontSize=13,
-        leading=16,
-        textColor=colors.HexColor('#0F172A'),
-        spaceBefore=15,
-        spaceAfter=8
-    )
-    
-    meta_label_style = ParagraphStyle(
-        'MetaLabel',
-        fontName='Helvetica-Bold',
-        fontSize=9,
-        leading=12,
-        textColor=colors.HexColor('#475569')
-    )
-    
-    meta_val_style = ParagraphStyle(
-        'MetaValue',
-        fontName='Helvetica',
-        fontSize=9,
-        leading=12,
-        textColor=colors.HexColor('#0F172A')
-    )
-    
-    speaker_style = ParagraphStyle(
-        'SpeakerName',
-        fontName='Helvetica-Bold',
-        fontSize=9,
-        leading=12,
-        textColor=colors.HexColor('#2563EB')
-    )
-    
-    time_style = ParagraphStyle(
-        'TimeText',
-        fontName='Helvetica-Oblique',
-        fontSize=8,
-        leading=10,
-        textColor=colors.HexColor('#64748B')
-    )
-    
-    speech_style = ParagraphStyle(
-        'SpeechText',
-        fontName='Helvetica',
-        fontSize=9,
-        leading=13,
-        textColor=colors.HexColor('#1E293B')
-    )
-
-    # 1. Document Title
-    story.append(Paragraph("Tech-Meet Interview Summary & Transcript", title_style))
-    story.append(HRFlowable(width="100%", thickness=2, color=colors.HexColor('#2563EB'), spaceAfter=15))
-    
-    # 2. Metadata Block
-    duration_mins = meet.get('attendance_duration', 0)
-    duration_str = f"{duration_mins // 60}m {duration_mins % 60}s" if duration_mins else "N/A"
-    
-    meta_data = [
-        [
-            Paragraph("Meeting ID:", meta_label_style), Paragraph(str(meet.get('id', meet_id)), meta_val_style),
-            Paragraph("Date & Time:", meta_label_style), Paragraph(str(meet.get('scheduled_time', 'N/A')), meta_val_style)
-        ],
-        [
-            Paragraph("Interview Title:", meta_label_style), Paragraph(str(meet.get('title', 'N/A')), meta_val_style),
-            Paragraph("Duration:", meta_label_style), Paragraph(duration_str, meta_val_style)
-        ],
-        [
-            Paragraph("Position/Domain:", meta_label_style), Paragraph(str(meet.get('position_domain', 'N/A')), meta_val_style),
-            Paragraph("Status:", meta_label_style), Paragraph(str(meet.get('attendance_status', 'Attended')), meta_val_style)
-        ],
-        [
-            Paragraph("Round Name:", meta_label_style), Paragraph(str(meet.get('round_name', 'N/A')), meta_val_style),
-            Paragraph("", meta_label_style), Paragraph("", meta_val_style)
-        ]
-    ]
-    
-    meta_table = Table(meta_data, colWidths=[1.3*inch, 2.2*inch, 1.3*inch, 2.2*inch])
-    meta_table.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,-1), colors.HexColor('#F8FAFC')),
-        ('PADDING', (0,0), (-1,-1), 8),
-        ('VALIGN', (0,0), (-1,-1), 'TOP'),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 6),
-        ('LINEBELOW', (0,0), (-1,-1), 0.5, colors.HexColor('#E2E8F0')),
-    ]))
-    
-    story.append(meta_table)
-    story.append(Spacer(1, 15))
-    
-    # 3. Transcript Logs Section
-    story.append(Paragraph("Live Transcription Logs", section_heading))
-    story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#CBD5E1'), spaceAfter=10))
-    
-    if not transcript:
-        story.append(Paragraph("No speech transcripts captured for this meeting.", meta_val_style))
-    else:
-        for i, entry in enumerate(transcript):
-            sender = entry.get('sender', 'Speaker')
-            text = entry.get('text', '')
-            timestamp = entry.get('timestamp', '')
-            
-            speaker_p = Paragraph(sender, speaker_style)
-            time_p = Paragraph(timestamp, time_style)
-            speech_p = Paragraph(text, speech_style)
-            
-            bg_color = colors.HexColor('#F8FAFC') if i % 2 == 0 else colors.HexColor('#FFFFFF')
-            
-            speaker_block = Table([[speaker_p], [time_p]], colWidths=[1.8*inch])
-            speaker_block.setStyle(TableStyle([
-                ('PADDING', (0,0), (-1,-1), 0),
-                ('VALIGN', (0,0), (-1,-1), 'TOP'),
-            ]))
-            
-            row_table = Table([[speaker_block, speech_p]], colWidths=[2.0*inch, 5.0*inch])
-            row_table.setStyle(TableStyle([
-                ('BACKGROUND', (0,0), (-1,-1), bg_color),
-                ('PADDING', (0,0), (-1,-1), 6),
-                ('VALIGN', (0,0), (-1,-1), 'TOP'),
-                ('LINEBELOW', (0,0), (-1,-1), 0.5, colors.HexColor('#F1F5F9')),
-            ]))
-            
-            story.append(row_table)
-            story.append(Spacer(1, 2))
-            
-    # Build Document
-    doc.build(story)
-    
-    return f"/uploads/{pdf_filename}"
-
 # Pydantic models
 class AttendancePayload(BaseModel):
     status: str
     duration: int
-    transcript: list[dict] = []
 
 class MeetingCreatePayload(BaseModel):
     title: str
     position_domain: str
     round_name: str
     scheduled_time: str
+
+class TranscriptLine(BaseModel):
+    speaker: str
+    text: str
+    timestamp: str
+
+class EndMeetingPayload(BaseModel):
+    attendance_duration: int
+    transcript: list[TranscriptLine]
 
 
 # Connection Manager for WebRTC WebSocket signaling and role based Waiting Room
@@ -337,36 +187,67 @@ async def upload_recording(meet_id: str, file: UploadFile = File(...)):
 def update_attendance(meet_id: str, payload: AttendancePayload):
     conn = get_db_connection()
     cursor = conn.cursor()
-    
-    # Save transcript and mark meeting as completed
     cursor.execute("""
         UPDATE meetings 
-        SET attendance_status = ?, attendance_duration = ?, status = 'Completed', transcript = ?
+        SET attendance_status = ?, attendance_duration = ?
         WHERE id = ?
-    """, (payload.status, payload.duration, json.dumps(payload.transcript), meet_id))
+    """, (payload.status, payload.duration, meet_id))
     conn.commit()
-
-    # Retrieve full meeting details to populate PDF metadata
-    cursor.execute("SELECT * FROM meetings WHERE id = ?", (meet_id,))
-    row = cursor.fetchone()
-    if row:
-        meet = dict(row)
-        try:
-            # Generate styled PDF transcript report
-            pdf_url = generate_transcript_pdf(meet_id, meet, payload.transcript)
-            
-            # Save the pdf_url in the database
-            cursor.execute("""
-                UPDATE meetings 
-                SET pdf_url = ?
-                WHERE id = ?
-            """, (pdf_url, meet_id))
-            conn.commit()
-        except Exception as e:
-            print(f"Error generating transcript PDF: {str(e)}")
-            
     conn.close()
-    return {"message": "Attendance updated successfully and transcript PDF generated"}
+    return {"message": "Attendance updated successfully"}
+
+
+@app.post("/api/meetings/{meet_id}/end")
+def end_meeting(meet_id: str, payload: EndMeetingPayload):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # 1. Fetch meeting info to populate PDF metadata
+        cursor.execute("SELECT * FROM meetings WHERE id = ?", (meet_id,))
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Meeting not found")
+            
+        meet_info = dict(row)
+        
+        # Convert Pydantic payload models to dicts
+        transcript_list = [dict(line) for line in payload.transcript]
+        transcript_json_str = json.dumps(transcript_list)
+        
+        # 2. Generate PDF report
+        pdf_url = generate_transcript_pdf(
+            meet_id=meet_id,
+            title=meet_info["title"],
+            round_name=meet_info["round_name"],
+            position_domain=meet_info["position_domain"],
+            scheduled_time=meet_info.get("scheduled_time", ""),
+            duration_seconds=payload.attendance_duration,
+            transcript=transcript_list
+        )
+        
+        # 3. Update meeting record in DB
+        cursor.execute("""
+            UPDATE meetings 
+            SET status = 'Completed', 
+                attendance_status = 'Attended', 
+                attendance_duration = ?, 
+                transcript_json = ?, 
+                transcript_pdf_url = ?
+            WHERE id = ?
+        """, (payload.attendance_duration, transcript_json_str, pdf_url, meet_id))
+        conn.commit()
+        conn.close()
+        
+        return {
+            "message": "Meeting ended and transcript PDF generated successfully",
+            "pdf_url": pdf_url
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
 
 
 @app.websocket("/api/ws/meet/{meet_id}")

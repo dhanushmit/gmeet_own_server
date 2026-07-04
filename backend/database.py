@@ -23,14 +23,12 @@ def init_db():
             attendance_status TEXT DEFAULT 'Absent',
             attendance_duration INTEGER DEFAULT 0,
             status TEXT DEFAULT 'Scheduled',
-            scheduled_time TEXT,
-            transcript TEXT,
-            pdf_url TEXT
+            scheduled_time TEXT
         )
     """)
     conn.commit()
 
-    # Migration for existing databases that might not have scheduled_time
+    # Migration for existing databases that might not have new columns
     try:
         cursor.execute("ALTER TABLE meetings ADD COLUMN scheduled_time TEXT")
         conn.commit()
@@ -38,20 +36,16 @@ def init_db():
         # Column already exists, ignore error
         pass
 
-    # Migration for transcript
     try:
-        cursor.execute("ALTER TABLE meetings ADD COLUMN transcript TEXT")
+        cursor.execute("ALTER TABLE meetings ADD COLUMN transcript_pdf_url TEXT")
         conn.commit()
     except sqlite3.OperationalError:
-        # Column already exists, ignore error
         pass
 
-    # Migration for pdf_url
     try:
-        cursor.execute("ALTER TABLE meetings ADD COLUMN pdf_url TEXT")
+        cursor.execute("ALTER TABLE meetings ADD COLUMN transcript_json TEXT")
         conn.commit()
     except sqlite3.OperationalError:
-        # Column already exists, ignore error
         pass
 
     # Seed some mock data if empty
