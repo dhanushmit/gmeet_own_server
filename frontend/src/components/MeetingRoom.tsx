@@ -108,6 +108,25 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
   const aiSpeakingTimeoutRef = useRef<any>(null);
   const autoPilotStartedRef = useRef(false);
   const recordingAudioContextRef = useRef<AudioContext | null>(null);
+  const recordingDestRef = useRef<MediaStreamAudioDestinationNode | null>(null);
+  const recordingSourcesMapRef = useRef<{ [trackId: string]: MediaStreamAudioSourceNode }>({});
+
+  const connectTrackToRecording = (track: MediaStreamTrack, peerUsername: string) => {
+    if (!recordingAudioContextRef.current || !recordingDestRef.current) return;
+    if (track.kind !== 'audio') return;
+
+    const trackId = `${peerUsername}-${track.id}`;
+    if (recordingSourcesMapRef.current[trackId]) return; // already connected
+
+    try {
+      console.log(`Dynamically connecting audio track from ${peerUsername} to active recording...`);
+      const audioSource = recordingAudioContextRef.current.createMediaStreamSource(new MediaStream([track]));
+      audioSource.connect(recordingDestRef.current);
+      recordingSourcesMapRef.current[trackId] = audioSource;
+    } catch (err) {
+      console.warn(`Failed to dynamically connect track from ${peerUsername} to recording`, err);
+    }
+  };
 
   // Add system message utility
   const addSystemMessage = (text: string) => {
@@ -568,10 +587,16 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
     pc.ontrack = (event) => {
       console.log(`Remote stream track received from ${targetUsername}`);
       if (event.streams && event.streams[0]) {
+        const stream = event.streams[0];
         setRemoteStreams((prev) => ({
           ...prev,
-          [targetUsername]: event.streams[0]
+          [targetUsername]: stream
         }));
+        
+        // Dynamically connect any new audio tracks to recording if active
+        stream.getAudioTracks().forEach((track) => {
+          connectTrackToRecording(track, targetUsername);
+        });
       }
     };
 
@@ -826,6 +851,8 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
       } catch (e) {}
       recordingAudioContextRef.current = null;
     }
+    recordingDestRef.current = null;
+    recordingSourcesMapRef.current = {};
 
     const durationSeconds = Math.floor((Date.now() - joinTimeRef.current) / 1000);
     
@@ -899,35 +926,30 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
       }
 
       const dest = audioContext.createMediaStreamDestination();
+      
+      recordingAudioContextRef.current = audioContext;
+      recordingDestRef.current = dest;
+      recordingSourcesMapRef.current = {};
 
-      // 1. Connect local audio if enabled
+      // 1. Connect local audio if it exists (regardless of enabled/disabled state)
       const localAudioTracks = localStream.getAudioTracks();
-      if (localAudioTracks.length > 0 && audioEnabled) {
-        const localSource = audioContext.createMediaStreamSource(new MediaStream([localAudioTracks[0]]));
-        localSource.connect(dest);
+      if (localAudioTracks.length > 0) {
+        try {
+          const localSource = audioContext.createMediaStreamSource(new MediaStream([localAudioTracks[0]]));
+          localSource.connect(dest);
+          recordingSourcesMapRef.current[`local-${localAudioTracks[0].id}`] = localSource;
+        } catch (err) {
+          console.warn("Could not connect local microphone to recording", err);
+        }
       }
 
-      // 2. Connect all remote audio streams
+      // 2. Connect all existing remote audio streams
       Object.keys(remoteStreams).forEach((peerUsername) => {
         const remoteStr = remoteStreams[peerUsername];
-        const remoteAudioTracks = remoteStr.getAudioTracks();
-        if (remoteAudioTracks.length > 0) {
-          try {
-            const remoteSource = audioContext.createMediaStreamSource(new MediaStream([remoteAudioTracks[0]]));
-            remoteSource.connect(dest);
-          } catch (err) {
-            console.warn(`Could not mix audio from peer ${peerUsername}`, err);
-          }
-        }
+        remoteStr.getAudioTracks().forEach((track) => {
+          connectTrackToRecording(track, peerUsername);
+        });
       });
-
-      // Keep recording audio context reference alive to prevent garbage collection
-      if (recordingAudioContextRef.current) {
-        try {
-          recordingAudioContextRef.current.close();
-        } catch (e) {}
-      }
-      recordingAudioContextRef.current = audioContext;
 
       // 3. Clone localStream to preserve video metadata, replacing its audio tracks with mixed audio
       const mixedStream = localStream.clone();
@@ -952,8 +974,10 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
         try {
           recordingAudioContextRef.current.close();
         } catch (e) {}
-        recordingAudioContextRef.current = null;
+          recordingAudioContextRef.current = null;
       }
+      recordingDestRef.current = null;
+      recordingSourcesMapRef.current = {};
     } else {
       const mixedStream = getMixedMeetingStream();
       if (mixedStream) {

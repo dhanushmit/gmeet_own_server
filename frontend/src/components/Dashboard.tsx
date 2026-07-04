@@ -45,15 +45,30 @@ export function Dashboard({ onJoinMeeting }: DashboardProps) {
   };
   
   const [transcribingMeetId, setTranscribingMeetId] = useState<string | null>(null);
+  const [transcriptionStep, setTranscriptionStep] = useState<number>(0);
 
   const handleTranscribe = async (meetId: string) => {
     if (transcribingMeetId) return;
     setTranscribingMeetId(meetId);
+    setTranscriptionStep(1);
+
+    // Setup simulated progress step updates
+    const t1 = setTimeout(() => setTranscriptionStep(2), 2500);
+    const t2 = setTimeout(() => setTranscriptionStep(3), 6000);
+    const t3 = setTimeout(() => setTranscriptionStep(4), 10000);
+
     try {
       const response = await fetch(`${API_URL}/api/meetings/${meetId}/transcribe`, {
         method: 'POST'
       });
+      
+      // Clear timers
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
+
       if (response.ok) {
+        setTranscriptionStep(5); // Completed
         const data = await response.json();
         if (data.pdf_url) {
           window.open(`${UPLOADS_URL}${data.pdf_url}`, '_blank');
@@ -67,7 +82,14 @@ export function Dashboard({ onJoinMeeting }: DashboardProps) {
       console.error(err);
       alert('Network error triggering transcription.');
     } finally {
-      setTranscribingMeetId(null);
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
+      // Wait a moment so the user sees the completed state, then reset
+      setTimeout(() => {
+        setTranscribingMeetId(null);
+        setTranscriptionStep(0);
+      }, 1500);
     }
   };
 
@@ -253,37 +275,83 @@ export function Dashboard({ onJoinMeeting }: DashboardProps) {
                             )}
                           </div>
                           {meet.recording_url && (
-                            <button
-                              onClick={() => handleTranscribe(meet.id)}
-                              disabled={transcribingMeetId !== null}
-                              className="btn-primary"
-                              style={{ 
-                                width: '100%', 
-                                display: 'flex', 
-                                alignItems: 'center', 
-                                justifyContent: 'center', 
-                                gap: '8px', 
-                                padding: '8px 0', 
-                                fontSize: '0.85rem',
-                                background: 'linear-gradient(135deg, var(--success), #059669)',
-                                cursor: transcribingMeetId !== null ? 'not-allowed' : 'pointer',
-                                opacity: transcribingMeetId !== null ? 0.7 : 1,
-                                border: 'none',
-                                borderRadius: '4px',
-                                color: '#fff',
-                                boxShadow: 'none'
-                              }}
-                            >
-                              {transcribingMeetId === meet.id ? (
-                                <>
-                                  <RefreshCw size={14} className="animate-spin" /> Transcribing...
-                                </>
-                              ) : (
-                                <>
-                                  <Award size={14} /> Audio to Text Convert
-                                </>
+                            <>
+                              <button
+                                onClick={() => handleTranscribe(meet.id)}
+                                disabled={transcribingMeetId !== null}
+                                className="btn-primary"
+                                style={{ 
+                                  width: '100%', 
+                                  display: 'flex', 
+                                  alignItems: 'center', 
+                                  justifyContent: 'center', 
+                                  gap: '8px', 
+                                  padding: '8px 0', 
+                                  fontSize: '0.85rem',
+                                  background: 'linear-gradient(135deg, var(--success), #059669)',
+                                  cursor: transcribingMeetId !== null ? 'not-allowed' : 'pointer',
+                                  opacity: transcribingMeetId !== null ? 0.7 : 1,
+                                  border: 'none',
+                                  borderRadius: '4px',
+                                  color: '#fff',
+                                  boxShadow: 'none'
+                                }}
+                              >
+                                {transcribingMeetId === meet.id ? (
+                                  <>
+                                    <RefreshCw size={14} className="animate-spin" /> Transcribing...
+                                  </>
+                                ) : (
+                                  <>
+                                    <Award size={14} /> Audio to Text Convert
+                                  </>
+                                )}
+                              </button>
+                              
+                              {transcribingMeetId === meet.id && (
+                                <div style={{ 
+                                  marginTop: '6px', 
+                                  padding: '12px', 
+                                  background: 'rgba(255, 255, 255, 0.03)', 
+                                  borderRadius: '6px', 
+                                  border: '1px solid rgba(255, 255, 255, 0.05)',
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  gap: '8px'
+                                }}>
+                                  <p style={{ fontSize: '0.78rem', fontWeight: 600, color: '#e5e7eb', marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                    <RefreshCw size={11} className="animate-spin" style={{ color: 'var(--success)' }} />
+                                    Transcription Progress Flow:
+                                  </p>
+                                  {[
+                                    { id: 1, text: "Extracting recorded audio file..." },
+                                    { id: 2, text: "Running Whisper voice transcription..." },
+                                    { id: 3, text: "Analyzing sentiment & vocal tones..." },
+                                    { id: 4, text: "Compiling premium PDF report..." },
+                                  ].map((s) => {
+                                    const isDone = transcriptionStep > s.id;
+                                    const isCurrent = transcriptionStep === s.id;
+                                    return (
+                                      <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.75rem' }}>
+                                        {isDone ? (
+                                          <span style={{ color: 'var(--success)', fontWeight: 'bold' }}>✓</span>
+                                        ) : isCurrent ? (
+                                          <RefreshCw size={10} className="animate-spin" style={{ color: 'var(--success)' }} />
+                                        ) : (
+                                          <span style={{ color: 'rgba(255, 255, 255, 0.2)' }}>○</span>
+                                        )}
+                                        <span style={{ 
+                                          color: isDone ? 'rgba(255, 255, 255, 0.6)' : isCurrent ? 'var(--success)' : 'rgba(255, 255, 255, 0.3)',
+                                          fontWeight: isCurrent ? 600 : 'normal'
+                                        }}>
+                                          {s.text}
+                                        </span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
                               )}
-                            </button>
+                            </>
                           )}
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
