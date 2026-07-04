@@ -107,6 +107,7 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
   const animationFrameRef = useRef<number | null>(null);
   const aiSpeakingTimeoutRef = useRef<any>(null);
   const autoPilotStartedRef = useRef(false);
+  const isWaitingForUploadRef = useRef(false);
   const recordingAudioContextRef = useRef<AudioContext | null>(null);
   const recordingDestRef = useRef<MediaStreamAudioDestinationNode | null>(null);
   const recordingSourcesMapRef = useRef<{ [trackId: string]: MediaStreamAudioSourceNode }>({});
@@ -146,10 +147,20 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
   // Recording Hook integration
   const { 
     isRecording, 
+    isUploading,
     recordingTimeText, 
     startRecording, 
     stopRecording 
-  } = useRecording({ meetId, onSystemMessage: addSystemMessage });
+  } = useRecording({ 
+    meetId, 
+    onSystemMessage: addSystemMessage,
+    onUploadComplete: () => {
+      if (isWaitingForUploadRef.current) {
+        console.log("Recording upload completed. Redirecting to dashboard...");
+        onLeave();
+      }
+    }
+  });
 
   // Initialize Web Audio API for Local active speaker detection
   useEffect(() => {
@@ -852,8 +863,13 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
 
   // Leave Call & Save Attendance & Transcript
   const handleLeaveCall = async () => {
+    let needsToWait = false;
+    
     // 1. Stop recording if it is active
     if (isRecording) {
+      console.log("Stopping recording and preparing file upload...");
+      needsToWait = true;
+      isWaitingForUploadRef.current = true;
       stopRecording();
     }
 
@@ -928,8 +944,12 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
     });
     pcsRef.current = {};
 
-    // 5. Leave room route back
-    onLeave();
+    // 5. Leave room route back only if we do not need to wait for upload
+    if (!needsToWait) {
+      onLeave();
+    } else {
+      addSystemMessage("Saving recording to server. Please do not close this window...");
+    }
   };
 
   const getMixedMeetingStream = () => {

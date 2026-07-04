@@ -4,10 +4,12 @@ import { API_URL } from '../config';
 interface UseRecordingProps {
   meetId: string;
   onSystemMessage: (text: string) => void;
+  onUploadComplete?: () => void;
 }
 
-export function useRecording({ meetId, onSystemMessage }: UseRecordingProps) {
+export function useRecording({ meetId, onSystemMessage, onUploadComplete }: UseRecordingProps) {
   const [isRecording, setIsRecording] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -48,9 +50,16 @@ export function useRecording({ meetId, onSystemMessage }: UseRecordingProps) {
         const blob = new Blob(chunksRef.current, { type: 'video/webm' });
         if (blob.size === 0) {
           console.warn('Recorded blob is empty.');
+          onUploadComplete?.();
           return;
         }
-        await uploadRecordingBlob(blob);
+        setIsUploading(true);
+        try {
+          await uploadRecordingBlob(blob);
+        } finally {
+          setIsUploading(false);
+          onUploadComplete?.();
+        }
       };
 
       // Start recording and collect chunks every 1s
@@ -114,6 +123,7 @@ export function useRecording({ meetId, onSystemMessage }: UseRecordingProps) {
 
   return {
     isRecording,
+    isUploading,
     recordingTimeText: formatTime(recordingTime),
     recordingDurationSeconds: recordingTime,
     startRecording,
