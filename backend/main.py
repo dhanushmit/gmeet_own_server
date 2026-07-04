@@ -171,73 +171,99 @@ def get_whisper_model():
         whisper_model_cache = WhisperModel("tiny", device="cpu", compute_type="int8")
     return whisper_model_cache
 
-def transcribe_recording_whisper_task(meet_id: str, file_path: str):
-    try:
-        print(f"Whisper background transcription started for meeting {meet_id}...")
+def run_transcription_and_generate_pdf(meet_id: str, file_path: str):
+    # 1. Fetch existing meeting info and real-time transcript from DB
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM meetings WHERE id = ?", (meet_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        print(f"Whisper error: Meeting {meet_id} not found in database.")
+        return None
         
-        # 1. Fetch existing meeting info and real-time transcript from DB
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM meetings WHERE id = ?", (meet_id,))
-        row = cursor.fetchone()
-        if not row:
-            conn.close()
-            print(f"Whisper error: Meeting {meet_id} not found in database.")
-            return
+    meet_info = dict(row)
+    
+    # Parse existing real-time transcript list
+    transcript_list = []
+    if meet_info.get("transcript_json"):
+        try:
+            transcript_list = json.loads(meet_info["transcript_json"])
+        except Exception as e:
+            print("Error parsing transcript_json:", e)
             
-        meet_info = dict(row)
+    # 2. Run Whisper transcription
+    model = get_whisper_model()
+    segments, info = model.transcribe(file_path, beam_size=5)
+    
+    whisper_transcript = []
+    for segment in segments:
+        start_sec = segment.start
+        text = segment.text.strip()
+        if not text:
+            continue
+            
+        # Align with real-time speaker chunks using closest timestamp match
+        closest_speaker = "Speaker"
+        closest_timestamp = ""
+        min_diff = 999999.0
+        closest_volume = 20
+        closest_rate = 2.5
         
-        # Parse existing real-time transcript list
-        transcript_list = []
-        if meet_info.get("transcript_json"):
-            try:
-                transcript_list = json.loads(meet_info["transcript_json"])
-            except Exception as e:
-                print("Error parsing transcript_json:", e)
-                
-        # 2. Run Whisper transcription
-        model = get_whisper_model()
-        segments, info = model.transcribe(file_path, beam_size=5)
+        for chunk in transcript_list:
+            chunk_sec = chunk.get("elapsed_seconds")
+            if chunk_sec is not None:
+                diff = abs(chunk_sec - start_sec)
+                if diff < min_diff:
+                    min_diff = diff
+                    closest_speaker = chunk.get("speaker", "Speaker")
+                    closest_timestamp = chunk.get("timestamp", "")
+                    closest_volume = chunk.get("average_volume", 20)
+                    closest_rate = chunk.get("speech_rate", 2.5)
         
-        whisper_transcript = []
-        for segment in segments:
-            start_sec = segment.start
-            text = segment.text.strip()
-            if not text:
-                continue
-                
-            # Align with real-time speaker chunks using closest timestamp match
-            closest_speaker = "Speaker"
-            closest_timestamp = ""
-            min_diff = 999999.0
+        # Formatting timestamp if missing
+        if not closest_timestamp:
+            minutes = int(start_sec) // 60
+            seconds = int(start_sec) % 60
+            closest_timestamp = f"{minutes:02d}:{seconds:02d}"
             
-            for chunk in transcript_list:
-                chunk_sec = chunk.get("elapsed_seconds")
-                if chunk_sec is not None:
-                    diff = abs(chunk_sec - start_sec)
-                    if diff < min_diff:
-                        min_diff = diff
-                        closest_speaker = chunk.get("speaker", "Speaker")
-                        closest_timestamp = chunk.get("timestamp", "")
-            
-            # Formatting timestamp if missing
-            if not closest_timestamp:
-                minutes = int(start_sec) // 60
-                seconds = int(start_sec) % 60
-                closest_timestamp = f"{minutes:02d}:{seconds:02d}"
-                
-            whisper_transcript.append({
-                "speaker": closest_speaker,
-                "text": text,
-                "timestamp": closest_timestamp,
-                "elapsed_seconds": start_sec
-            })
-            
-        # If whisper successfully transcribed text, update DB and generate new PDF report
-        if whisper_transcript:
-            whisper_json_str = json.dumps(whisper_transcript)
-            
-            # Re-generate PDF using the Whisper refined transcript
+        whisper_transcript.append({
+            "speaker": closest_speaker,
+            "text": text,
+            "timestamp": closest_timestamp,
+            "elapsed_seconds": start_sec,
+            "average_volume": closest_volume,
+            "speech_rate": closest_rate
+        })
+        
+    # If whisper successfully transcribed text, update DB and generate new PDF report
+    pdf_url = None
+    if whisper_transcript:
+        whisper_json_str = json.dumps(whisper_transcript)
+        
+        # Re-generate PDF using the Whisper refined transcript
+        pdf_url = generate_transcript_pdf(
+            meet_id=meet_id,
+            title=meet_info["title"],
+            round_name=meet_info["round_name"],
+            position_domain=meet_info["position_domain"],
+            scheduled_time=meet_info.get("scheduled_time", ""),
+            duration_seconds=meet_info.get("attendance_duration", 0),
+            transcript=whisper_transcript
+        )
+        
+        # Update SQLite DB
+        cursor.execute("""
+            UPDATE meetings 
+            SET transcript_json = ?, 
+                transcript_pdf_url = ?
+            WHERE id = ?
+        """, (whisper_json_str, pdf_url, meet_id))
+        conn.commit()
+        print(f"Whisper transcription completed and PDF updated for meeting {meet_id}.")
+    else:
+        # Fallback to generating PDF from real-time logs if whisper returned empty
+        if transcript_list:
             pdf_url = generate_transcript_pdf(
                 meet_id=meet_id,
                 title=meet_info["title"],
@@ -245,22 +271,23 @@ def transcribe_recording_whisper_task(meet_id: str, file_path: str):
                 position_domain=meet_info["position_domain"],
                 scheduled_time=meet_info.get("scheduled_time", ""),
                 duration_seconds=meet_info.get("attendance_duration", 0),
-                transcript=whisper_transcript
+                transcript=transcript_list
             )
-            
-            # Update SQLite DB
             cursor.execute("""
                 UPDATE meetings 
-                SET transcript_json = ?, 
-                    transcript_pdf_url = ?
+                SET transcript_pdf_url = ?
                 WHERE id = ?
-            """, (whisper_json_str, pdf_url, meet_id))
+            """, (pdf_url, meet_id))
             conn.commit()
-            print(f"Whisper background transcription completed and PDF updated for meeting {meet_id}.")
-        else:
-            print(f"Whisper returned empty transcript segments for meeting {meet_id}.")
+            print(f"Whisper returned empty, PDF generated from real-time log for meeting {meet_id}.")
             
-        conn.close()
+    conn.close()
+    return pdf_url
+
+def transcribe_recording_whisper_task(meet_id: str, file_path: str):
+    try:
+        print(f"Whisper background transcription started for meeting {meet_id}...")
+        run_transcription_and_generate_pdf(meet_id, file_path)
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -293,6 +320,41 @@ async def upload_recording(meet_id: str, background_tasks: BackgroundTasks, file
     background_tasks.add_task(transcribe_recording_whisper_task, meet_id, dest_path)
 
     return {"message": "Upload successful and Whisper transcription queued", "recording_url": recording_url}
+
+
+@app.post("/api/meetings/{meet_id}/transcribe")
+def trigger_manual_transcription(meet_id: str):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM meetings WHERE id = ?", (meet_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Meeting not found")
+        
+    meet_info = dict(row)
+    recording_url = meet_info.get("recording_url")
+    if not recording_url:
+        conn.close()
+        raise HTTPException(status_code=400, detail="No recording found for this meeting")
+        
+    # Get physical file path
+    filename = os.path.basename(recording_url)
+    file_path = os.path.join(UPLOAD_DIR, filename)
+    
+    if not os.path.exists(file_path):
+        conn.close()
+        raise HTTPException(status_code=404, detail="Recording file not found on disk")
+        
+    conn.close()
+    
+    try:
+        pdf_url = run_transcription_and_generate_pdf(meet_id, file_path)
+        return {"message": "Transcription successful", "pdf_url": pdf_url}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
 
 
 @app.post("/api/meetings/{meet_id}/attendance")

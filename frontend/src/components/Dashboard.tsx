@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import type { Meeting } from '../types';
 import { API_URL, UPLOADS_URL } from '../config';
-import { Video, Award, Clock, Play, Plus, Link as LinkIcon, Copy, Check, FileText } from 'lucide-react';
+import { Video, Award, Clock, Play, Plus, Link as LinkIcon, Copy, Check, FileText, RefreshCw } from 'lucide-react';
 
 interface DashboardProps {
   onJoinMeeting: (meetId: string) => void;
@@ -41,6 +41,33 @@ export function Dashboard({ onJoinMeeting }: DashboardProps) {
       setError('Could not connect to FastAPI server. Please ensure the backend is running.');
     } finally {
       setLoading(false);
+    }
+  };
+  
+  const [transcribingMeetId, setTranscribingMeetId] = useState<string | null>(null);
+
+  const handleTranscribe = async (meetId: string) => {
+    if (transcribingMeetId) return;
+    setTranscribingMeetId(meetId);
+    try {
+      const response = await fetch(`${API_URL}/api/meetings/${meetId}/transcribe`, {
+        method: 'POST'
+      });
+      if (response.ok) {
+        const data = await response.json();
+        if (data.pdf_url) {
+          window.open(`${UPLOADS_URL}${data.pdf_url}`, '_blank');
+        }
+        await fetchMeetings(); // Refresh meeting list to display the PDF link
+      } else {
+        const err = await response.json().catch(() => ({}));
+        alert(`Transcription failed: ${err.detail || response.statusText}`);
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Network error triggering transcription.');
+    } finally {
+      setTranscribingMeetId(null);
     }
   };
 
@@ -200,28 +227,63 @@ export function Dashboard({ onJoinMeeting }: DashboardProps) {
                   <div style={{ marginTop: 'auto', paddingTop: '16px', borderTop: '1px solid rgba(255, 255, 255, 0.05)', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                     {meet.status === 'Completed' ? (
                       <>
-                        <div style={{ display: 'flex', gap: '8px', width: '100%' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%' }}>
+                          <div style={{ display: 'flex', gap: '8px', width: '100%' }}>
+                            {meet.recording_url && (
+                              <a 
+                                href={`${UPLOADS_URL}${meet.recording_url}`} 
+                                target="_blank" 
+                                rel="noopener noreferrer" 
+                                className="btn-secondary" 
+                                style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', textDecoration: 'none', padding: '8px 0', fontSize: '0.85rem' }}
+                              >
+                                <Play size={14} /> Video
+                              </a>
+                            )}
+                            {meet.transcript_pdf_url && (
+                              <a 
+                                href={`${UPLOADS_URL}${meet.transcript_pdf_url}`} 
+                                target="_blank" 
+                                rel="noopener noreferrer" 
+                                className="btn-secondary" 
+                                style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', textDecoration: 'none', padding: '8px 0', fontSize: '0.85rem' }}
+                              >
+                                <FileText size={14} /> PDF Log
+                              </a>
+                            )}
+                          </div>
                           {meet.recording_url && (
-                            <a 
-                              href={`${UPLOADS_URL}${meet.recording_url}`} 
-                              target="_blank" 
-                              rel="noopener noreferrer" 
-                              className="btn-secondary" 
-                              style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', textDecoration: 'none', padding: '8px 0', fontSize: '0.85rem' }}
+                            <button
+                              onClick={() => handleTranscribe(meet.id)}
+                              disabled={transcribingMeetId !== null}
+                              className="btn-primary"
+                              style={{ 
+                                width: '100%', 
+                                display: 'flex', 
+                                alignItems: 'center', 
+                                justifyContent: 'center', 
+                                gap: '8px', 
+                                padding: '8px 0', 
+                                fontSize: '0.85rem',
+                                background: 'linear-gradient(135deg, var(--success), #059669)',
+                                cursor: transcribingMeetId !== null ? 'not-allowed' : 'pointer',
+                                opacity: transcribingMeetId !== null ? 0.7 : 1,
+                                border: 'none',
+                                borderRadius: '4px',
+                                color: '#fff',
+                                boxShadow: 'none'
+                              }}
                             >
-                              <Play size={14} /> Video
-                            </a>
-                          )}
-                          {meet.transcript_pdf_url && (
-                            <a 
-                              href={`${UPLOADS_URL}${meet.transcript_pdf_url}`} 
-                              target="_blank" 
-                              rel="noopener noreferrer" 
-                              className="btn-secondary" 
-                              style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', textDecoration: 'none', padding: '8px 0', fontSize: '0.85rem' }}
-                            >
-                              <FileText size={14} /> PDF Log
-                            </a>
+                              {transcribingMeetId === meet.id ? (
+                                <>
+                                  <RefreshCw size={14} className="animate-spin" /> Transcribing...
+                                </>
+                              ) : (
+                                <>
+                                  <Award size={14} /> Audio to Text Convert
+                                </>
+                              )}
+                            </button>
                           )}
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
