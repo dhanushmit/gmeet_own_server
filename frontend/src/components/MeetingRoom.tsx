@@ -643,10 +643,12 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
           [targetUsername]: stream
         }));
         
-        // Dynamically connect any new audio tracks to recording if active
-        stream.getAudioTracks().forEach((track) => {
-          connectTrackToRecording(track, targetUsername);
-        });
+        // Dynamically connect any new audio tracks to recording after a 1.5s delay to ensure the remote video DOM element is playing (bypasses Chromium audio routing bug)
+        setTimeout(() => {
+          stream.getAudioTracks().forEach((track) => {
+            connectTrackToRecording(track, targetUsername);
+          });
+        }, 1500);
       }
     };
 
