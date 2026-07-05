@@ -147,7 +147,6 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
   // Recording Hook integration
   const { 
     isRecording, 
-    isUploading,
     recordingTimeText, 
     startRecording, 
     stopRecording 
