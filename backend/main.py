@@ -177,6 +177,7 @@ class TranscriptLine(BaseModel):
 class EndMeetingPayload(BaseModel):
     attendance_duration: int
     transcript: list[TranscriptLine]
+    participants: list[str] | None = None
 
 
 # Connection Manager for WebRTC WebSocket signaling and role based Waiting Room
@@ -580,7 +581,8 @@ def end_meeting(meet_id: str, payload: EndMeetingPayload):
             position_domain=meet_info["position_domain"],
             scheduled_time=meet_info.get("scheduled_time", ""),
             duration_seconds=payload.attendance_duration,
-            transcript=transcript_list
+            transcript=transcript_list,
+            participants=payload.participants
         )
         
         # 3. Update meeting record in DB
@@ -590,9 +592,10 @@ def end_meeting(meet_id: str, payload: EndMeetingPayload):
                 attendance_status = 'Attended', 
                 attendance_duration = ?, 
                 transcript_json = ?, 
-                transcript_pdf_url = ?
+                transcript_pdf_url = ?,
+                participants = ?
             WHERE id = ?
-        """, (payload.attendance_duration, transcript_json_str, pdf_url, meet_id))
+        """, (payload.attendance_duration, transcript_json_str, pdf_url, json.dumps(payload.participants) if payload.participants else None, meet_id))
         conn.commit()
         conn.close()
         
@@ -654,6 +657,33 @@ def append_transcript_chunk(meet_id: str, sender: str, text: str, elapsed_second
         conn.close()
     except Exception as e:
         print(f"Error appending transcript chunk: {e}")
+
+
+@app.post("/api/meetings/transcribe-chunk")
+async def transcribe_chunk(file: UploadFile = File(...)):
+    try:
+        # Save temp file
+        ext = os.path.splitext(file.filename)[1] or ".wav"
+        temp_filename = f"temp_{uuid.uuid4().hex}{ext}"
+        temp_path = os.path.join(UPLOAD_DIR, temp_filename)
+        with open(temp_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        # Transcribe chunk using Whisper
+        model = get_whisper_model()
+        segments, info = model.transcribe(temp_path, beam_size=5)
+        text = " ".join([segment.text for segment in segments]).strip()
+
+        # Clean up temp file
+        try:
+            os.remove(temp_path)
+        except Exception:
+            pass
+
+        return {"text": text}
+    except Exception as e:
+        print(f"Error transcribing chunk: {e}")
+        return {"text": ""}
 
 
 @app.websocket("/api/ws/meet/{meet_id}")

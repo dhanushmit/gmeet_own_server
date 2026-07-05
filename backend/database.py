@@ -48,6 +48,12 @@ def init_db():
     except sqlite3.OperationalError:
         pass
 
+    try:
+        cursor.execute("ALTER TABLE meetings ADD COLUMN participants TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+
     # Seed some mock data if empty
     cursor.execute("SELECT COUNT(*) FROM meetings")
     if cursor.fetchone()[0] == 0:

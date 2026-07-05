@@ -4,7 +4,7 @@ import { API_URL, WS_URL } from '../config';
 import { useRecording } from '../hooks/useRecording';
 import { 
   Mic, MicOff, Video as VideoIcon, VideoOff, 
-  MessageSquare, PhoneOff, Send, Cpu, Sparkles, Check, X, ShieldAlert, Clock 
+  MessageSquare, PhoneOff, Send, Cpu, Sparkles, Check, X, ShieldAlert, Clock, Users 
 } from 'lucide-react';
 
 interface MeetingRoomProps {
@@ -83,6 +83,74 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
     };
     transcriptRef.current = [...transcriptRef.current, newLine];
   };
+
+  const handleFinalSpeechTranscript = (text: string) => {
+    if (!text || !text.trim()) return;
+
+    // Calculate voice features
+    const vols = speakingVolumesRef.current;
+    const avgVol = vols.length > 0 ? (vols.reduce((a, b) => a + b, 0) / vols.length) : 20;
+    
+    const durationSec = speechStartRef.current > 0 ? (Date.now() - speechStartRef.current) / 1000 : 1.5;
+    const wordCount = text.split(/\s+/).length;
+    const speechRate = durationSec > 0.5 ? (wordCount / durationSec) : (wordCount / 1.5);
+    
+    // Reset refs
+    speakingVolumesRef.current = [];
+    speechStartRef.current = 0;
+
+    addTranscriptLine(displayName, text, undefined, avgVol, speechRate);
+
+    // Append locally to chat box messages as a Live Caption
+    const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: Math.random().toString(),
+        sender: displayName,
+        text: `[Live Caption] ${text}`,
+        timestamp: timeStr,
+        type: 'user'
+      }
+    ]);
+
+    // Broadcast final segment and chat message to all peers
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      const elapsed = joinTimeRef.current ? Math.floor((Date.now() - joinTimeRef.current) / 1000) : 0;
+      
+      // 1. Send transcription segment
+      wsRef.current.send(JSON.stringify({
+        type: 'transcript-chunk',
+        text: text,
+        sender: displayName,
+        elapsed_seconds: elapsed,
+        average_volume: avgVol,
+        speech_rate: speechRate
+      }));
+
+      // 2. Send live caption chat message
+      wsRef.current.send(JSON.stringify({
+        type: 'chat-message',
+        sender: displayName,
+        text: `[Live Caption] ${text}`,
+        timestamp: timeStr
+      }));
+
+      // 3. Send final live caption event
+      wsRef.current.send(JSON.stringify({
+        type: 'live-caption',
+        sender: displayName,
+        text: text,
+        isFinal: true
+      }));
+    }
+
+    // Update local active caption
+    setActiveCaptions((prev) => ({
+      ...prev,
+      [displayName]: { text, isFinal: true, timestamp: Date.now() }
+    }));
+  };
   const [isKickedOut, setIsKickedOut] = useState(false);
   const [peers, setPeers] = useState<string[]>([]); // Usernames of other peers
   const [showChat, setShowChat] = useState(true);
@@ -97,6 +165,37 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
 
   // Active Speaker States (Audio Analysis)
   const [isLocalSpeaking, setIsLocalSpeaking] = useState(false);
+
+  // Live Captions & Participant Management States
+  const [sidebarTab, setSidebarTab] = useState<'chat' | 'participants'>('chat');
+  const [activeCaptions, setActiveCaptions] = useState<{ [username: string]: { text: string; isFinal: boolean; timestamp: number } }>({});
+  const [attendedList, setAttendedList] = useState<string[]>([displayName]);
+
+  // Track all unique participants who join during the session
+  useEffect(() => {
+    peers.forEach(peer => {
+      setAttendedList(prev => prev.includes(peer) ? prev : [...prev, peer]);
+    });
+  }, [peers]);
+
+  // Fades out/clears captions after inactivity (4s for final, 6s for interim)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now();
+      setActiveCaptions((prev) => {
+        const next = { ...prev };
+        let changed = false;
+        Object.entries(next).forEach(([user, cap]) => {
+          if ((cap.isFinal && now - cap.timestamp > 4000) || (!cap.isFinal && now - cap.timestamp > 6000)) {
+            delete next[user];
+            changed = true;
+          }
+        });
+        return changed ? next : prev;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Refs
   const localVideoRef = useRef<HTMLVideoElement>(null);
@@ -336,138 +435,179 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
 
   // Speech-to-Text Transcription Setup
   const recognitionRef = useRef<any>(null);
+  const fallbackRecorderRef = useRef<MediaRecorder | null>(null);
+
   useEffect(() => {
+    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      console.warn("Speech Recognition API not supported in this browser.");
-      addSystemMessage("Speech capture unavailable: Your browser/device does not support the Web Speech API. Please use Google Chrome or Safari for active speech transcription.");
-      return;
-    }
-
-    const rec = new SpeechRecognition();
-    rec.continuous = true;
-    rec.interimResults = false;
     
-    // Set speech recognition language based on lobby preference
-    rec.lang = spokenLanguage;
+    // We default to fallback for mobile devices because they consistently block double mic use or fail webkitSpeechRecognition
+    const useFallback = !SpeechRecognition || isMobile;
 
-    rec.onresult = (event: any) => {
-      // Loop through all new results to ensure no speech chunks are lost (solves empty/skipped chunks)
-      for (let i = event.resultIndex; i < event.results.length; ++i) {
-        if (event.results[i].isFinal) {
-          const transcriptText = event.results[i][0].transcript.trim();
-          
-          if (transcriptText) {
-            console.log("Transcribed speech chunk:", transcriptText);
-            
-            // Calculate voice features
-            const vols = speakingVolumesRef.current;
-            const avgVol = vols.length > 0 ? (vols.reduce((a, b) => a + b, 0) / vols.length) : 20;
-            
-            const durationSec = speechStartRef.current > 0 ? (Date.now() - speechStartRef.current) / 1000 : 1.5;
-            const wordCount = transcriptText.split(/\s+/).length;
-            const speechRate = durationSec > 0.5 ? (wordCount / durationSec) : (wordCount / 1.5);
-            
-            // Reset refs
-            speakingVolumesRef.current = [];
-            speechStartRef.current = 0;
+    let startTimeout: any = null;
+    let restartInterval: any = null;
+    let rec: any = null;
 
-            addTranscriptLine(displayName, transcriptText, undefined, avgVol, speechRate);
-
-            // Append locally to chat box messages as a Live Caption
-            const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: Math.random().toString(),
-                sender: displayName,
-                text: `[Live Caption] ${transcriptText}`,
-                timestamp: timeStr,
-                type: 'user'
+    const startFallbackTranscription = () => {
+      if (fallbackRecorderRef.current) return;
+      if (!localStream) return;
+      
+      const audioTrack = localStream.getAudioTracks()[0];
+      if (!audioTrack) {
+        console.warn("No audio track available for fallback transcription.");
+        return;
+      }
+      
+      try {
+        console.log("Initializing Whisper backend fallback transcription...");
+        // Clone stream so as to not interfere with WebRTC
+        const mediaStream = new MediaStream([audioTrack.clone()]);
+        const recorder = new MediaRecorder(mediaStream);
+        
+        recorder.ondataavailable = async (event) => {
+          if (event.data && event.data.size > 0 && isAdmittedRef.current && !isKickedOut) {
+            const audioBlob = event.data;
+            const formData = new FormData();
+            formData.append('file', audioBlob, 'chunk.wav');
+            
+            try {
+              const res = await fetch(`${API_URL}/api/meetings/transcribe-chunk`, {
+                method: 'POST',
+                body: formData
+              });
+              const data = await res.json();
+              const text = data.text?.trim();
+              if (text) {
+                console.log("Whisper fallback transcription result:", text);
+                handleFinalSpeechTranscript(text);
               }
-            ]);
-
-            // Broadcast both transcript-chunk and chat-message to all peers
-            if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-              const elapsed = joinTimeRef.current ? Math.floor((Date.now() - joinTimeRef.current) / 1000) : 0;
-              
-              // 1. Send transcription segment
-              wsRef.current.send(JSON.stringify({
-                type: 'transcript-chunk',
-                text: transcriptText,
-                sender: displayName,
-                elapsed_seconds: elapsed,
-                average_volume: avgVol,
-                speech_rate: speechRate
-              }));
-
-              // 2. Send live caption chat message
-              wsRef.current.send(JSON.stringify({
-                type: 'chat-message',
-                sender: displayName,
-                text: `[Live Caption] ${transcriptText}`,
-                timestamp: timeStr
-              }));
+            } catch (err) {
+              console.error("Error calling Whisper fallback transcription:", err);
             }
           }
-        }
-      }
-    };
-
-    rec.onerror = (err: any) => {
-      console.error("Speech Recognition error:", err.error);
-      addSystemMessage("Speech capture warning: " + err.error);
-      if (err.error === 'network' || err.error === 'aborted' || err.error === 'no-speech') {
-        setTimeout(() => {
-          try {
-            if (isAdmittedRef.current && !isKickedOut) rec.start();
-          } catch (e) {}
-        }, 1000);
-      }
-    };
-
-    rec.onend = () => {
-      console.log("Speech Recognition session ended. Restarting...");
-      try {
-        if (isAdmittedRef.current && !isKickedOut) {
-          rec.start();
-        }
+        };
+        
+        fallbackRecorderRef.current = recorder;
+        recorder.start(4000); // 4-second audio slices
+        console.log("Whisper fallback transcription active.");
       } catch (e) {
-        // Immediate restart failed, retry in 300ms
-        setTimeout(() => {
-          try {
-            if (isAdmittedRef.current && !isKickedOut) {
-              rec.start();
-            }
-          } catch (err) {}
-        }, 300);
+        console.error("Error starting Whisper fallback transcription:", e);
       }
     };
 
-    recognitionRef.current = rec;
-
-    let restartInterval: any = null;
-    let startTimeout: any = null;
-    if (isAdmitted && localStream && audioEnabled) {
-      // Delay candidate speech start by 2 seconds to avoid concurrent mic access conflicts with WebRTC negotiation
-      const delayMs = role === 'admin' ? 0 : 2000;
-      startTimeout = setTimeout(() => {
+    const stopFallbackTranscription = () => {
+      if (fallbackRecorderRef.current) {
         try {
-          rec.start();
-          console.log("Speech recognition started.");
-          addSystemMessage("Speech capture active.");
+          if (fallbackRecorderRef.current.state !== 'inactive') {
+            fallbackRecorderRef.current.stop();
+          }
+        } catch (e) {}
+        fallbackRecorderRef.current = null;
+        console.log("Whisper fallback transcription stopped.");
+      }
+    };
 
-          // Periodic restart to avoid browser SpeechRecognition freeze (keeps it highly responsive)
-          restartInterval = setInterval(() => {
+    if (isAdmitted && localStream && audioEnabled) {
+      if (useFallback) {
+        // Use backend Whisper fallback directly (highly robust for mobile and iOS Safari)
+        addSystemMessage("Initializing mobile/safari audio captioning fallback...");
+        startFallbackTranscription();
+      } else {
+        // Use browser SpeechRecognition API
+        try {
+          rec = new SpeechRecognition();
+          rec.continuous = true;
+          rec.interimResults = true;
+          rec.lang = spokenLanguage;
+
+          rec.onresult = (event: any) => {
+            let interimTranscript = '';
+            for (let i = event.resultIndex; i < event.results.length; ++i) {
+              const transcriptText = event.results[i][0].transcript.trim();
+              if (event.results[i].isFinal) {
+                handleFinalSpeechTranscript(transcriptText);
+              } else {
+                interimTranscript += transcriptText + ' ';
+              }
+            }
+
+            if (interimTranscript.trim()) {
+              const textToBroadcast = interimTranscript.trim();
+              if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                wsRef.current.send(JSON.stringify({
+                  type: 'live-caption',
+                  sender: displayName,
+                  text: textToBroadcast,
+                  isFinal: false
+                }));
+              }
+              setActiveCaptions(prev => ({
+                ...prev,
+                [displayName]: { text: textToBroadcast, isFinal: false, timestamp: Date.now() }
+              }));
+            }
+          };
+
+          rec.onerror = (err: any) => {
+            console.error("Speech Recognition error:", err.error);
+            if (err.error === 'not-allowed' || err.error === 'audio-capture' || err.error === 'service-not-allowed') {
+              console.warn("SpeechRecognition blocked or failed. Switching to Whisper fallback...");
+              addSystemMessage("Local Speech Recognition failed to capture mic. Switching to Whisper server fallback...");
+              try {
+                rec.abort();
+              } catch (e) {}
+              startFallbackTranscription();
+            } else if (err.error === 'network' || err.error === 'aborted' || err.error === 'no-speech') {
+              setTimeout(() => {
+                try {
+                  if (isAdmittedRef.current && !isKickedOut && !fallbackRecorderRef.current) rec.start();
+                } catch (e) {}
+              }, 1000);
+            }
+          };
+
+          rec.onend = () => {
+            console.log("Speech Recognition session ended.");
             try {
-              console.log("Periodic restart of Speech Recognition...");
-              rec.stop();
-            } catch (e) {}
-          }, 90000); // 90 seconds
-        } catch (e) {
-          console.error("Error starting speech recognition:", e);
+              if (isAdmittedRef.current && !isKickedOut && !fallbackRecorderRef.current) {
+                rec.start();
+              }
+            } catch (e) {
+              setTimeout(() => {
+                try {
+                  if (isAdmittedRef.current && !isKickedOut && !fallbackRecorderRef.current) {
+                    rec.start();
+                  }
+                } catch (err) {}
+              }, 300);
+            }
+          };
+
+          recognitionRef.current = rec;
+
+          const delayMs = role === 'admin' ? 0 : 2000;
+          startTimeout = setTimeout(() => {
+            try {
+              rec.start();
+              console.log("Speech recognition started.");
+              addSystemMessage("Speech capture active.");
+
+              restartInterval = setInterval(() => {
+                try {
+                  console.log("Periodic restart of Speech Recognition...");
+                  rec.stop();
+                } catch (e) {}
+              }, 90000); // 90 seconds
+            } catch (e) {
+              console.error("Error starting speech recognition:", e);
+            }
+          }, delayMs);
+
+        } catch (setupErr) {
+          console.error("Error setting up SpeechRecognition:", setupErr);
+          startFallbackTranscription();
         }
-      }, delayMs);
+      }
     } else {
       console.log("Speech recognition suspended (muted or waiting).");
     }
@@ -475,12 +615,14 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
     return () => {
       if (startTimeout) clearTimeout(startTimeout);
       if (restartInterval) clearInterval(restartInterval);
+      stopFallbackTranscription();
       if (recognitionRef.current) {
         recognitionRef.current.onend = null;
         recognitionRef.current.onerror = null;
         try {
           recognitionRef.current.abort();
         } catch (e) {}
+        recognitionRef.current = null;
       }
     };
   }, [isAdmitted, localStream, audioEnabled, spokenLanguage]);
@@ -615,6 +757,15 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
                 type: 'remote'
               }
             ]);
+          }
+          break;
+
+        case 'live-caption':
+          if (isAdmittedRef.current) {
+            setActiveCaptions((prev) => ({
+              ...prev,
+              [data.sender]: { text: data.text, isFinal: data.isFinal, timestamp: Date.now() }
+            }));
           }
           break;
 
@@ -966,7 +1117,8 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           attendance_duration: durationSeconds,
-          transcript: transcriptRef.current
+          transcript: transcriptRef.current,
+          participants: attendedList
         })
       });
     } catch (e) {
@@ -1331,133 +1483,253 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
             )}
 
           </div>
+
+          {/* Live Sync Captions Overlay */}
+          {Object.keys(activeCaptions).length > 0 && (
+            <div className="live-captions-overlay">
+              {Object.entries(activeCaptions).map(([user, data]) => {
+                if (!data.text.trim()) return null;
+                return (
+                  <div key={user} className="live-caption-bubble">
+                    <span className="live-caption-speaker">{user}:</span>
+                    <span className={`live-caption-text ${!data.isFinal ? 'interim' : ''}`}>
+                      {data.text}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         {/* Live Chat Sidebar */}
         <div className={`chat-sidebar ${!showChat ? 'hidden' : ''}`}>
-          <div className="chat-header">
-            <h3 style={{ fontSize: '1rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <MessageSquare size={18} className="text-primary" /> Live Chat
-            </h3>
-            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{messages.length} messages</span>
+          
+          {/* Chat Tabs */}
+          <div className="chat-tabs" style={{ display: 'flex', borderBottom: '1px solid var(--glass-border)' }}>
+            <button 
+              type="button"
+              onClick={() => setSidebarTab('chat')}
+              style={{
+                flex: 1,
+                padding: '14px',
+                background: sidebarTab === 'chat' ? 'rgba(99, 102, 241, 0.08)' : 'transparent',
+                border: 'none',
+                borderBottom: sidebarTab === 'chat' ? '2px solid #818cf8' : 'none',
+                color: sidebarTab === 'chat' ? '#fff' : 'var(--text-muted)',
+                fontWeight: 600,
+                fontSize: '0.85rem',
+                cursor: 'pointer',
+                transition: 'all 0.2s',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px'
+              }}
+            >
+              <MessageSquare size={16} />
+              Chat ({messages.length})
+            </button>
+            <button 
+              type="button"
+              onClick={() => setSidebarTab('participants')}
+              style={{
+                flex: 1,
+                padding: '14px',
+                background: sidebarTab === 'participants' ? 'rgba(99, 102, 241, 0.08)' : 'transparent',
+                border: 'none',
+                borderBottom: sidebarTab === 'participants' ? '2px solid #818cf8' : 'none',
+                color: sidebarTab === 'participants' ? '#fff' : 'var(--text-muted)',
+                fontWeight: 600,
+                fontSize: '0.85rem',
+                cursor: 'pointer',
+                transition: 'all 0.2s',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px'
+              }}
+            >
+              <Users size={16} />
+              Participants ({peers.length + 1})
+            </button>
           </div>
 
-          {/* Host Panel: Waiting Candidates list */}
-          {role === 'admin' && waitingCandidates.length > 0 && (
-            <div className="glass-panel" style={{ 
-              padding: '16px', 
-              margin: '16px 16px 0 16px', 
-              background: 'rgba(245, 158, 11, 0.08)', 
-              borderColor: 'rgba(245, 158, 11, 0.3)',
-              borderRadius: '8px'
-            }}>
-              <h4 style={{ fontSize: '0.85rem', color: 'var(--warning)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '10px' }}>
-                <ShieldAlert size={14} /> Waiting Lobby ({waitingCandidates.length})
-              </h4>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                {waitingCandidates.map((candidateName) => (
-                  <div key={candidateName} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.2)', padding: '6px 10px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.03)' }}>
-                    <span style={{ fontSize: '0.85rem', fontWeight: 500 }}>{candidateName}</span>
-                    <div style={{ display: 'flex', gap: '6px' }}>
-                      <button 
-                        onClick={() => { console.log('Admitting', candidateName); handleAdmitCandidate(candidateName); }}
-                        style={{ 
-                          width: '38px', 
-                          height: '38px', 
-                          borderRadius: '50%', 
-                          background: 'var(--success)', 
-                          display: 'flex', 
-                          alignItems: 'center', 
-                          justifyContent: 'center', 
-                          color: '#fff', 
-                          padding: 0,
-                          border: 'none',
-                          cursor: 'pointer',
-                          touchAction: 'manipulation'
-                        }}
-                        title="Admit Candidate"
-                      >
-                        <Check size={18} />
-                      </button>
-                      <button 
-                        onClick={() => { console.log('Removing', candidateName); handleRemoveCandidate(candidateName); }}
-                        style={{ 
-                          width: '38px', 
-                          height: '38px', 
-                          borderRadius: '50%', 
-                          background: 'var(--danger)', 
-                          display: 'flex', 
-                          alignItems: 'center', 
-                          justifyContent: 'center', 
-                          color: '#fff', 
-                          padding: 0,
-                          border: 'none',
-                          cursor: 'pointer',
-                          touchAction: 'manipulation'
-                        }}
-                        title="Remove Candidate"
-                      >
-                        <X size={18} />
-                      </button>
+          {sidebarTab === 'chat' ? (
+            <>
+              <div className="chat-header" style={{ padding: '12px 20px', background: 'rgba(0,0,0,0.1)', justifyContent: 'space-between' }}>
+                <h3 style={{ fontSize: '0.9rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <MessageSquare size={16} className="text-primary" /> Live Chat
+                </h3>
+              </div>
+
+              {/* Host Panel: Waiting Candidates list */}
+              {role === 'admin' && waitingCandidates.length > 0 && (
+                <div className="glass-panel" style={{ 
+                  padding: '16px', 
+                  margin: '16px 16px 0 16px', 
+                  background: 'rgba(245, 158, 11, 0.08)', 
+                  borderColor: 'rgba(245, 158, 11, 0.3)',
+                  borderRadius: '8px'
+                }}>
+                  <h4 style={{ fontSize: '0.85rem', color: 'var(--warning)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '10px' }}>
+                    <ShieldAlert size={14} /> Waiting Lobby ({waitingCandidates.length})
+                  </h4>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {waitingCandidates.map((candidateName) => (
+                      <div key={candidateName} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.2)', padding: '6px 10px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.03)' }}>
+                        <span style={{ fontSize: '0.85rem', fontWeight: 500 }}>{candidateName}</span>
+                        <div style={{ display: 'flex', gap: '6px' }}>
+                          <button 
+                            type="button"
+                            onClick={() => { console.log('Admitting', candidateName); handleAdmitCandidate(candidateName); }}
+                            style={{ 
+                              width: '32px', 
+                              height: '32px', 
+                              borderRadius: '50%', 
+                              background: 'var(--success)', 
+                              display: 'flex', 
+                              alignItems: 'center', 
+                              justifyContent: 'center', 
+                              color: '#fff', 
+                              padding: 0,
+                              border: 'none',
+                              cursor: 'pointer'
+                            }}
+                            title="Admit Candidate"
+                          >
+                            <Check size={16} />
+                          </button>
+                          <button 
+                            type="button"
+                            onClick={() => { console.log('Removing', candidateName); handleRemoveCandidate(candidateName); }}
+                            style={{ 
+                              width: '32px', 
+                              height: '32px', 
+                              borderRadius: '50%', 
+                              background: 'var(--danger)', 
+                              display: 'flex', 
+                              alignItems: 'center', 
+                              justifyContent: 'center', 
+                              color: '#fff', 
+                              padding: 0,
+                              border: 'none',
+                              cursor: 'pointer'
+                            }}
+                            title="Remove Candidate"
+                          >
+                            <X size={16} />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="chat-messages">
+                {messages.map((msg) => (
+                  <div key={msg.id} className={`chat-message ${msg.type}`}>
+                    <div 
+                      className="msg-bubble"
+                      style={msg.text.startsWith('[Live Caption]') ? {
+                        background: 'rgba(99, 102, 241, 0.12)',
+                        border: '1px dashed rgba(99, 102, 241, 0.4)',
+                        color: '#e2e8f0',
+                        fontStyle: 'italic'
+                      } : {}}
+                    >
+                      {msg.text}
+                    </div>
+                    <div className="msg-meta">
+                      <span style={{ fontWeight: 600 }}>{msg.sender}</span>
+                      <span>•</span>
+                      <span>{msg.timestamp}</span>
                     </div>
                   </div>
                 ))}
+
+                {isAiTyping && (
+                  <div className="chat-message remote">
+                    <div className="msg-bubble" style={{ padding: '4px 12px' }}>
+                      <div className="typing-indicator">
+                        <div className="typing-dot" />
+                        <div className="typing-dot" />
+                        <div className="typing-dot" />
+                      </div>
+                    </div>
+                    <div className="msg-meta">
+                      <span style={{ fontWeight: 600 }}>AI Interviewer</span>
+                      <span>is typing...</span>
+                    </div>
+                  </div>
+                )}
+                
+                <div ref={messagesEndRef} />
+              </div>
+
+              <form onSubmit={handleSendMessage} className="chat-input-bar">
+                <input 
+                  type="text" 
+                  placeholder="Send message to room..." 
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                />
+                <button type="submit" className="chat-send-btn">
+                  <Send size={16} />
+                </button>
+              </form>
+            </>
+          ) : (
+            /* Participants tab content */
+            <div style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
+              <h4 style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', fontWeight: 600, marginBottom: '16px' }}>
+                Active in Call ({peers.length + 1})
+              </h4>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                
+                {/* Local user card */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(255,255,255,0.02)', padding: '10px 14px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.03)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--success)' }} />
+                    <span style={{ fontSize: '0.9rem', fontWeight: 600 }}>{displayName} (You)</span>
+                  </div>
+                  <span style={{ fontSize: '0.75rem', color: '#818cf8', background: 'rgba(129, 140, 248, 0.15)', padding: '2px 8px', borderRadius: '12px', textTransform: 'capitalize' }}>
+                    {role === 'admin' ? 'Host' : 'Candidate'}
+                  </span>
+                </div>
+
+                {/* Peer user cards */}
+                {peers.map((peerName) => (
+                  <div key={peerName} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(255,255,255,0.02)', padding: '10px 14px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.03)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--success)' }} />
+                      <span style={{ fontSize: '0.9rem', fontWeight: 500 }}>{peerName}</span>
+                    </div>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', background: 'rgba(255, 255, 255, 0.05)', padding: '2px 8px', borderRadius: '12px' }}>
+                      {peerName.toLowerCase().includes('admin') || peerName.toLowerCase().includes('interviewer') ? 'Host' : 'Candidate'}
+                    </span>
+                  </div>
+                ))}
+
+                {/* AI Interviewer card */}
+                {aiActive && (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(99, 102, 241, 0.05)', padding: '10px 14px', borderRadius: '8px', border: '1px solid rgba(99, 102, 241, 0.1)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--primary)', animation: 'rec-pulse 1.5s infinite' }} />
+                      <span style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--primary)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <Sparkles size={12} /> AI Interviewer
+                      </span>
+                    </div>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--primary)', background: 'rgba(99, 102, 241, 0.15)', padding: '2px 8px', borderRadius: '12px' }}>
+                      AI Peer
+                    </span>
+                  </div>
+                )}
+
               </div>
             </div>
           )}
-
-          <div className="chat-messages">
-            {messages.map((msg) => (
-              <div key={msg.id} className={`chat-message ${msg.type}`}>
-                <div 
-                  className="msg-bubble"
-                  style={msg.text.startsWith('[Live Caption]') ? {
-                    background: 'rgba(99, 102, 241, 0.12)',
-                    border: '1px dashed rgba(99, 102, 241, 0.4)',
-                    color: '#e2e8f0',
-                    fontStyle: 'italic'
-                  } : {}}
-                >
-                  {msg.text}
-                </div>
-                <div className="msg-meta">
-                  <span style={{ fontWeight: 600 }}>{msg.sender}</span>
-                  <span>•</span>
-                  <span>{msg.timestamp}</span>
-                </div>
-              </div>
-            ))}
-
-            {isAiTyping && (
-              <div className="chat-message remote">
-                <div className="msg-bubble" style={{ padding: '4px 12px' }}>
-                  <div className="typing-indicator">
-                    <div className="typing-dot" />
-                    <div className="typing-dot" />
-                    <div className="typing-dot" />
-                  </div>
-                </div>
-                <div className="msg-meta">
-                  <span style={{ fontWeight: 600 }}>AI Interviewer</span>
-                  <span>is typing...</span>
-                </div>
-              </div>
-            )}
-            
-            <div ref={messagesEndRef} />
-          </div>
-
-          <form onSubmit={handleSendMessage} className="chat-input-bar">
-            <input 
-              type="text" 
-              placeholder="Send message to room..." 
-              value={chatInput}
-              onChange={(e) => setChatInput(e.target.value)}
-            />
-            <button type="submit" className="chat-send-btn">
-              <Send size={16} />
-            </button>
-          </form>
         </div>
 
       </div>

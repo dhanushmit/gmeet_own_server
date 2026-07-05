@@ -12,7 +12,8 @@ def generate_transcript_pdf(
     position_domain: str, 
     scheduled_time: str, 
     duration_seconds: int, 
-    transcript: list
+    transcript: list,
+    participants: list = None
 ) -> str:
     # 1. Ensure uploads directory exists
     current_dir = os.path.dirname(__file__)
@@ -130,6 +131,22 @@ def generate_transcript_pdf(
         except Exception:
             pass
             
+    # Extract unique participants (excluding system/AI)
+    if participants:
+        unique_participants = []
+        for p in participants:
+            p_clean = p.strip() if p else ""
+            if p_clean and p_clean not in unique_participants and p_clean not in ["System", "AI Interviewer"]:
+                unique_participants.append(p_clean)
+        participants_str = ", ".join(unique_participants) if unique_participants else "N/A"
+    else:
+        unique_speakers = []
+        for line in transcript:
+            sp = line.get("speaker", "Unknown").strip()
+            if sp and sp not in unique_speakers and sp not in ["System", "AI Interviewer"]:
+                unique_speakers.append(sp)
+        participants_str = ", ".join(unique_speakers) if unique_speakers else "N/A"
+
     meta_data = [
         [
             Paragraph("Meeting ID:", meta_label_style),
@@ -148,6 +165,12 @@ def generate_transcript_pdf(
             Paragraph(formatted_date or "N/A", meta_value_style),
             Paragraph("Actual Duration:", meta_label_style),
             Paragraph(duration_str, meta_value_style)
+        ],
+        [
+            Paragraph("Participants:", meta_label_style),
+            Paragraph(participants_str, meta_value_style),
+            Paragraph("", meta_label_style),
+            Paragraph("", meta_value_style)
         ]
     ]
     
