@@ -447,27 +447,33 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
     recognitionRef.current = rec;
 
     let restartInterval: any = null;
+    let startTimeout: any = null;
     if (isAdmitted && localStream && audioEnabled) {
-      try {
-        rec.start();
-        console.log("Speech recognition started.");
-        addSystemMessage("Speech capture active.");
+      // Delay candidate speech start by 2 seconds to avoid concurrent mic access conflicts with WebRTC negotiation
+      const delayMs = role === 'admin' ? 0 : 2000;
+      startTimeout = setTimeout(() => {
+        try {
+          rec.start();
+          console.log("Speech recognition started.");
+          addSystemMessage("Speech capture active.");
 
-        // Periodic restart to avoid browser SpeechRecognition freeze (keeps it highly responsive)
-        restartInterval = setInterval(() => {
-          try {
-            console.log("Periodic restart of Speech Recognition...");
-            rec.stop();
-          } catch (e) {}
-        }, 90000); // 90 seconds
-      } catch (e) {
-        console.error("Error starting speech recognition:", e);
-      }
+          // Periodic restart to avoid browser SpeechRecognition freeze (keeps it highly responsive)
+          restartInterval = setInterval(() => {
+            try {
+              console.log("Periodic restart of Speech Recognition...");
+              rec.stop();
+            } catch (e) {}
+          }, 90000); // 90 seconds
+        } catch (e) {
+          console.error("Error starting speech recognition:", e);
+        }
+      }, delayMs);
     } else {
       console.log("Speech recognition suspended (muted or waiting).");
     }
 
     return () => {
+      if (startTimeout) clearTimeout(startTimeout);
       if (restartInterval) clearInterval(restartInterval);
       if (recognitionRef.current) {
         recognitionRef.current.onend = null;
