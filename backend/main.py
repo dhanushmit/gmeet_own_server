@@ -30,6 +30,58 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 # Mount uploads directory to serve recording files
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
+@app.get("/")
+def read_root():
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse("""
+        <html>
+            <head>
+                <title>Tech-Meet Backend</title>
+                <style>
+                    body {
+                        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                        text-align: center;
+                        padding-top: 100px;
+                        background: #0f172a;
+                        color: #f8fafc;
+                        margin: 0;
+                    }
+                    .card {
+                        background: rgba(30, 41, 59, 0.7);
+                        border: 1px solid rgba(255, 255, 255, 0.1);
+                        border-radius: 12px;
+                        padding: 30px;
+                        max-width: 450px;
+                        margin: 0 auto;
+                        box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5);
+                    }
+                    a {
+                        color: #6366f1;
+                        text-decoration: none;
+                        font-weight: 600;
+                        border: 1px solid #6366f1;
+                        padding: 10px 20px;
+                        border-radius: 6px;
+                        display: inline-block;
+                        margin-top: 15px;
+                        transition: all 0.2s;
+                    }
+                    a:hover {
+                        background: #6366f1;
+                        color: white;
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="card">
+                    <h2>Tech-Meet Backend is Running!</h2>
+                    <p>To use the application, please open the frontend dashboard:</p>
+                    <a href="http://localhost:5173">Go to http://localhost:5173</a>
+                </div>
+            </body>
+        </html>
+    """)
+
 
 # Pydantic models
 class AttendancePayload(BaseModel):
