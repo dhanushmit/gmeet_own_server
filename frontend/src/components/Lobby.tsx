@@ -6,7 +6,7 @@ import { Video, VideoOff, Mic, MicOff, User, ArrowLeft, ArrowRight, ShieldAlert 
 interface LobbyProps {
   meetId: string;
   initialRole?: 'admin' | 'candidate';
-  onJoin: (displayName: string, videoEnabled: boolean, audioEnabled: boolean, autoPilot: boolean, role: 'admin' | 'candidate', spokenLanguage: string) => void;
+  onJoin: (displayName: string, videoEnabled: boolean, audioEnabled: boolean, autoPilot: boolean, role: 'admin' | 'candidate', spokenLanguage: string, stream: MediaStream | null) => void;
   onBack: () => void;
 }
 
@@ -102,12 +102,7 @@ export function Lobby({ meetId, initialRole = 'candidate', onJoin, onBack }: Lob
 
     // Removed password check
 
-    // Stop local stream so it can be re-initialized in the meeting room
-    if (stream) {
-      stream.getTracks().forEach((track) => track.stop());
-    }
-    
-    onJoin(displayName.trim(), videoEnabled, audioEnabled, autoPilot, joinRole, spokenLanguage);
+    onJoin(displayName.trim(), videoEnabled, audioEnabled, autoPilot, joinRole, spokenLanguage, stream);
   };
 
   return (

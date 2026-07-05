@@ -15,6 +15,7 @@ interface MeetingRoomProps {
   autoPilot: boolean;
   role: 'admin' | 'candidate';
   spokenLanguage?: string;
+  lobbyStream?: MediaStream | null;
   onLeave: () => void;
 }
 
@@ -52,7 +53,7 @@ function RemoteVideo({ stream }: RemoteVideoProps) {
   );
 }
 
-export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, autoPilot, role, spokenLanguage = 'en-IN', onLeave }: MeetingRoomProps) {
+export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, autoPilot, role, spokenLanguage = 'en-IN', lobbyStream = null, onLeave }: MeetingRoomProps) {
   // Call States
   const [videoEnabled, setVideoEnabled] = useState(initialVideo);
   const [audioEnabled, setAudioEnabled] = useState(initialAudio);
@@ -226,6 +227,25 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
   useEffect(() => {
     let activeStream: MediaStream | null = null;
     async function initLocalStream() {
+      if (lobbyStream) {
+        console.log("Using active media stream from lobby.");
+        activeStream = lobbyStream;
+        
+        // Apply configurations
+        lobbyStream.getVideoTracks().forEach(track => {
+          track.enabled = videoEnabled;
+        });
+        lobbyStream.getAudioTracks().forEach(track => {
+          track.enabled = audioEnabled;
+        });
+        
+        setLocalStream(lobbyStream);
+        if (localVideoRef.current) {
+          localVideoRef.current.srcObject = lobbyStream;
+        }
+        return;
+      }
+
       try {
         // Always request both video and audio tracks to allow toggling them dynamically during the call
         // Apply WebRTC noiseSuppression, echoCancellation, and autoGainControl for clean noise-free sound
@@ -279,11 +299,11 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
     initLocalStream();
 
     return () => {
-      if (activeStream) {
+      if (activeStream && activeStream !== lobbyStream) {
         activeStream.getTracks().forEach((track) => track.stop());
       }
     };
-  }, []);
+  }, [lobbyStream]);
 
   // Keep local video element in sync with localStream
   useEffect(() => {
