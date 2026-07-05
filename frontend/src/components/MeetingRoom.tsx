@@ -383,14 +383,21 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
     };
 
     rec.onend = () => {
-      console.log("Speech Recognition session ended.");
-      setTimeout(() => {
-        try {
-          if (isAdmittedRef.current && !isKickedOut) {
-            rec.start();
-          }
-        } catch (e) {}
-      }, 1000);
+      console.log("Speech Recognition session ended. Restarting...");
+      try {
+        if (isAdmittedRef.current && !isKickedOut) {
+          rec.start();
+        }
+      } catch (e) {
+        // Immediate restart failed, retry in 300ms
+        setTimeout(() => {
+          try {
+            if (isAdmittedRef.current && !isKickedOut) {
+              rec.start();
+            }
+          } catch (err) {}
+        }, 300);
+      }
     };
 
     recognitionRef.current = rec;
@@ -408,7 +415,7 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
             console.log("Periodic restart of Speech Recognition...");
             rec.stop();
           } catch (e) {}
-        }, 45000); // 45 seconds
+        }, 90000); // 90 seconds
       } catch (e) {
         console.error("Error starting speech recognition:", e);
       }
@@ -890,44 +897,28 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
 
     const durationSeconds = Math.floor((Date.now() - joinTimeRef.current) / 1000);
     
-    // 2. Post attendance and transcript details depending on role
-    if (role === 'admin') {
-      try {
-        console.log('Ending meeting and saving transcript logs...');
-        
-        // Notify others that meeting has ended
-        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-          wsRef.current.send(JSON.stringify({
-            type: 'meeting-ended',
-            sender: displayName
-          }));
-        }
+    // 2. Post attendance and transcript details to end meeting (both Admin and Candidate trigger this to generate PDF)
+    try {
+      console.log('Ending meeting and saving transcript logs...');
+      
+      // Notify others
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({
+          type: 'meeting-ended',
+          sender: displayName
+        }));
+      }
 
-        await fetch(`${API_URL}/api/meetings/${meetId}/end`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            attendance_duration: durationSeconds,
-            transcript: transcriptRef.current
-          })
-        });
-      } catch (e) {
-        console.error('Error saving final logs and transcript:', e);
-      }
-    } else {
-      // Candidates save their own attendance logs
-      try {
-        await fetch(`${API_URL}/api/meetings/${meetId}/attendance`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            status: 'Attended',
-            duration: durationSeconds
-          })
-        });
-      } catch (err) {
-        console.error('Candidate attendance update failed:', err);
-      }
+      await fetch(`${API_URL}/api/meetings/${meetId}/end`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          attendance_duration: durationSeconds,
+          transcript: transcriptRef.current
+        })
+      });
+    } catch (e) {
+      console.error('Error saving final logs and transcript:', e);
     }
 
     // 3. Clear local camera tracks

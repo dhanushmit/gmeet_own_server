@@ -423,7 +423,24 @@ def end_meeting(meet_id: str, payload: EndMeetingPayload):
         meet_info = dict(row)
         
         # Convert Pydantic payload models to dicts
-        transcript_list = [dict(line) for line in payload.transcript]
+        payload_transcript = [dict(line) for line in payload.transcript]
+        
+        # Fetch whatever real-time transcript chunks are stored in the DB
+        db_transcript = []
+        if meet_info.get("transcript_json"):
+            try:
+                db_transcript = json.loads(meet_info["transcript_json"])
+            except Exception:
+                pass
+                
+        # Merge both lists to be absolutely sure we don't lose any chunks
+        merged_map = {}
+        for line in db_transcript + payload_transcript:
+            text_cleaned = line.get("text", "").strip().lower()
+            key = (line.get("speaker", ""), text_cleaned, int(line.get("elapsed_seconds") or 0))
+            merged_map[key] = line
+            
+        transcript_list = sorted(merged_map.values(), key=lambda x: x.get("elapsed_seconds") or 0.0)
         transcript_json_str = json.dumps(transcript_list)
         
         # 2. Generate PDF report
@@ -458,6 +475,56 @@ def end_meeting(meet_id: str, payload: EndMeetingPayload):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+
+
+def append_transcript_chunk(meet_id: str, sender: str, text: str, elapsed_seconds: float, average_volume: float, speech_rate: float):
+    """
+    Appends a WebSpeech transcript chunk received over WebSockets directly to the DB in real-time.
+    Prevents duplication and guarantees no speech chunks are lost.
+    """
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT transcript_json FROM meetings WHERE id = ?", (meet_id,))
+        row = cursor.fetchone()
+        
+        transcript_list = []
+        if row and row["transcript_json"]:
+            try:
+                transcript_list = json.loads(row["transcript_json"])
+            except Exception:
+                pass
+                
+        # Format timestamp from elapsed_seconds
+        minutes = int(elapsed_seconds) // 60
+        seconds = int(elapsed_seconds) % 60
+        timestamp = f"{minutes:02d}:{seconds:02d}"
+        
+        new_line = {
+            "speaker": sender,
+            "text": text,
+            "timestamp": timestamp,
+            "elapsed_seconds": elapsed_seconds,
+            "average_volume": average_volume,
+            "speech_rate": speech_rate
+        }
+        
+        # Simple duplicate check within same elapsed window
+        is_duplicate = False
+        for line in transcript_list:
+            if line.get("speaker") == sender and line.get("text") == text and abs((line.get("elapsed_seconds") or 0.0) - elapsed_seconds) < 2:
+                is_duplicate = True
+                break
+                
+        if not is_duplicate:
+            transcript_list.append(new_line)
+            transcript_json_str = json.dumps(transcript_list)
+            cursor.execute("UPDATE meetings SET transcript_json = ? WHERE id = ?", (transcript_json_str, meet_id))
+            conn.commit()
+            print(f"Appended real-time websocket chunk for {meet_id} from {sender}: {text}")
+        conn.close()
+    except Exception as e:
+        print(f"Error appending transcript chunk: {e}")
 
 
 @app.websocket("/api/ws/meet/{meet_id}")
@@ -564,6 +631,15 @@ async def websocket_signaling(
                     else:
                         # Broadcast other messages (chat, transcripts, etc.) to all other admitted clients
                         await manager.broadcast_to_admitted(data, meet_id, sender_ws=websocket)
+                        
+                        # Real-time WebSocket transcript chunk logging
+                        if msg_type == "transcript-chunk":
+                            sender = data.get("sender", "Unknown")
+                            text = data.get("text", "")
+                            elapsed_seconds = float(data.get("elapsed_seconds") or 0.0)
+                            average_volume = float(data.get("average_volume") or 20.0)
+                            speech_rate = float(data.get("speech_rate") or 2.5)
+                            append_transcript_chunk(meet_id, sender, text, elapsed_seconds, average_volume, speech_rate)
 
     except WebSocketDisconnect:
         current_info = manager.room_clients.get(meet_id, {}).get(websocket, {})
