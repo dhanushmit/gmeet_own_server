@@ -411,7 +411,7 @@ async def upload_recording(meet_id: str, background_tasks: BackgroundTasks, file
 
 
 @app.post("/api/meetings/{meet_id}/transcribe")
-def trigger_manual_transcription(meet_id: str):
+def trigger_manual_transcription(meet_id: str, background_tasks: BackgroundTasks):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM meetings WHERE id = ?", (meet_id,))
@@ -436,13 +436,10 @@ def trigger_manual_transcription(meet_id: str):
         
     conn.close()
     
-    try:
-        pdf_url = run_transcription_and_generate_pdf(meet_id, file_path)
-        return {"message": "Transcription successful", "pdf_url": pdf_url}
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
+    # Launch background task to transcribe (prevents HTTP request timeout)
+    background_tasks.add_task(transcribe_recording_whisper_task, meet_id, file_path)
+    
+    return {"message": "Transcription triggered and queued successfully"}
 
 
 @app.post("/api/meetings/{meet_id}/attendance")

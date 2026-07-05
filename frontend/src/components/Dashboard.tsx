@@ -53,43 +53,77 @@ export function Dashboard({ onJoinMeeting }: DashboardProps) {
     setTranscriptionStep(1);
 
     // Setup simulated progress step updates
-    const t1 = setTimeout(() => setTranscriptionStep(2), 2500);
-    const t2 = setTimeout(() => setTranscriptionStep(3), 6000);
-    const t3 = setTimeout(() => setTranscriptionStep(4), 10000);
+    const t1 = setTimeout(() => setTranscriptionStep(2), 2000);
+    const t2 = setTimeout(() => setTranscriptionStep(3), 5000);
+    const t3 = setTimeout(() => setTranscriptionStep(4), 8000);
 
     try {
       const response = await fetch(`${API_URL}/api/meetings/${meetId}/transcribe`, {
         method: 'POST'
       });
       
-      // Clear timers
-      clearTimeout(t1);
-      clearTimeout(t2);
-      clearTimeout(t3);
-
-      if (response.ok) {
-        setTranscriptionStep(5); // Completed
-        const data = await response.json();
-        if (data.pdf_url) {
-          window.open(`${UPLOADS_URL}${data.pdf_url}`, '_blank');
-        }
-        await fetchMeetings(); // Refresh meeting list to display the PDF link
-      } else {
+      if (!response.ok) {
+        clearTimeout(t1);
+        clearTimeout(t2);
+        clearTimeout(t3);
         const err = await response.json().catch(() => ({}));
         alert(`Transcription failed: ${err.detail || response.statusText}`);
+        setTranscribingMeetId(null);
+        setTranscriptionStep(0);
+        return;
       }
+
+      // Started successfully in background, now poll for completion
+      console.log("Transcription triggered in background. Polling for PDF...");
+      
+      let pollCount = 0;
+      const pollInterval = setInterval(async () => {
+        pollCount++;
+        try {
+          const meetRes = await fetch(`${API_URL}/api/meetings/${meetId}`);
+          if (meetRes.ok) {
+            const meetData = await meetRes.json();
+            if (meetData.transcript_pdf_url) {
+              clearInterval(pollInterval);
+              clearTimeout(t1);
+              clearTimeout(t2);
+              clearTimeout(t3);
+              setTranscriptionStep(5); // Completed
+              
+              // Open PDF
+              window.open(`${UPLOADS_URL}${meetData.transcript_pdf_url}`, '_blank');
+              await fetchMeetings(); // Refresh list
+              
+              setTimeout(() => {
+                setTranscribingMeetId(null);
+                setTranscriptionStep(0);
+              }, 1500);
+            }
+          }
+        } catch (e) {
+          console.error("Polling error:", e);
+        }
+
+        if (pollCount >= 30) { // Timeout after 60 seconds (30 * 2s)
+          clearInterval(pollInterval);
+          clearTimeout(t1);
+          clearTimeout(t2);
+          clearTimeout(t3);
+          alert("Transcription is taking longer than expected. Please click the Refresh button in a few moments to download the PDF.");
+          setTranscribingMeetId(null);
+          setTranscriptionStep(0);
+          fetchMeetings();
+        }
+      }, 2000); // Poll every 2 seconds
+
     } catch (err) {
       console.error(err);
-      alert('Network error triggering transcription.');
-    } finally {
       clearTimeout(t1);
       clearTimeout(t2);
       clearTimeout(t3);
-      // Wait a moment so the user sees the completed state, then reset
-      setTimeout(() => {
-        setTranscribingMeetId(null);
-        setTranscriptionStep(0);
-      }, 1500);
+      alert('Network error triggering transcription.');
+      setTranscribingMeetId(null);
+      setTranscriptionStep(0);
     }
   };
 
