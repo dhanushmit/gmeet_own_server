@@ -74,6 +74,34 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 # Mount uploads directory to serve recording files
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
+@app.get("/api/debug/ffmpeg")
+def debug_ffmpeg():
+    import shutil
+    import subprocess
+    
+    ffmpeg_in_path = bool(shutil.which("ffmpeg"))
+    ffprobe_in_path = bool(shutil.which("ffprobe"))
+    
+    local_ffmpeg_exists = os.path.exists(os.path.join(backend_dir, "ffmpeg"))
+    local_ffprobe_exists = os.path.exists(os.path.join(backend_dir, "ffprobe"))
+    
+    ffmpeg_version = "N/A"
+    if ffmpeg_in_path:
+        try:
+            ffmpeg_version = subprocess.check_output(["ffmpeg", "-version"], text=True).split("\n")[0]
+        except Exception as e:
+            ffmpeg_version = f"Error: {e}"
+            
+    return {
+        "ffmpeg_in_path": ffmpeg_in_path,
+        "ffprobe_in_path": ffprobe_in_path,
+        "local_ffmpeg_exists": local_ffmpeg_exists,
+        "local_ffprobe_exists": local_ffprobe_exists,
+        "ffmpeg_version": ffmpeg_version,
+        "sys_platform": sys.platform,
+        "env_path": os.environ.get("PATH", "")
+    }
+
 @app.get("/")
 def read_root():
     from fastapi.responses import HTMLResponse
