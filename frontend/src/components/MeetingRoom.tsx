@@ -144,7 +144,7 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
     ]);
   };
 
-  // Recording Hook integration
+  // Recording Hook integration (with unused isUploading removed)
   const { 
     isRecording, 
     recordingTimeText, 
