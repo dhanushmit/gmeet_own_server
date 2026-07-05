@@ -208,10 +208,12 @@ class ConnectionManager:
         except Exception:
             pass
 
-    async def broadcast_to_admitted(self, message: dict, room_id: str, sender_ws: WebSocket = None):
+    async def broadcast_to_admitted(self, message: dict, room_id: str):
         if room_id in self.room_clients:
-            for connection, info in self.room_clients[room_id].items():
-                if connection != sender_ws and info["status"] == "admitted":
+            # Copy items to avoid "dictionary changed size during iteration" runtime errors
+            active_clients = list(self.room_clients[room_id].items())
+            for connection, info in active_clients:
+                if info["status"] == "admitted":
                     try:
                         await connection.send_json(message)
                     except Exception:
@@ -221,9 +223,12 @@ class ConnectionManager:
         if room_id not in self.room_clients:
             return
         
+        # Copy values to avoid concurrent modification errors
+        client_infos = list(self.room_clients[room_id].values())
+        
         # Get list of all waiting candidates
         waiting_candidates = []
-        for info in self.room_clients[room_id].values():
+        for info in client_infos:
             if info["role"] == "candidate" and info["status"] == "waiting":
                 waiting_candidates.append(info["username"])
 
@@ -232,7 +237,10 @@ class ConnectionManager:
             "type": "waiting-list",
             "candidates": waiting_candidates
         }
-        for ws, info in self.room_clients[room_id].items():
+        
+        # Copy items to avoid concurrent modification errors
+        active_clients = list(self.room_clients[room_id].items())
+        for ws, info in active_clients:
             if info["role"] == "admin":
                 try:
                     await ws.send_json(event)
@@ -672,7 +680,7 @@ async def websocket_signaling(
             "sender": username,
             "message": f"{username} (Host) has joined the room."
         }
-        await manager.broadcast_to_admitted(join_event, meet_id, sender_ws=websocket)
+        await manager.broadcast_to_admitted(join_event, meet_id)
 
     try:
         while True:
@@ -750,8 +758,8 @@ async def websocket_signaling(
                         if target_ws:
                             await manager.send_personal_message(data, target_ws)
                     else:
-                        # Broadcast other messages (chat, transcripts, etc.) to all other admitted clients
-                        await manager.broadcast_to_admitted(data, meet_id, sender_ws=websocket)
+                        # Broadcast other messages (chat, transcripts, etc.) to all admitted clients
+                        await manager.broadcast_to_admitted(data, meet_id)
                         
                         # Real-time WebSocket transcript chunk logging
                         if msg_type == "transcript-chunk":
