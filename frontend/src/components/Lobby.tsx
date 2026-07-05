@@ -6,7 +6,7 @@ import { Video, VideoOff, Mic, MicOff, User, ArrowLeft, ArrowRight, ShieldAlert 
 interface LobbyProps {
   meetId: string;
   initialRole?: 'admin' | 'candidate';
-  onJoin: (displayName: string, videoEnabled: boolean, audioEnabled: boolean, autoPilot: boolean, role: 'admin' | 'candidate') => void;
+  onJoin: (displayName: string, videoEnabled: boolean, audioEnabled: boolean, autoPilot: boolean, role: 'admin' | 'candidate', spokenLanguage: string) => void;
   onBack: () => void;
 }
 
@@ -19,6 +19,7 @@ export function Lobby({ meetId, initialRole = 'candidate', onJoin, onBack }: Lob
   
   // New States for Roles and Waiting room
   const [joinRole, setJoinRole] = useState<'candidate' | 'admin'>(initialRole);
+  const [spokenLanguage, setSpokenLanguage] = useState('en-IN');
 
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [permissionError, setPermissionError] = useState<string | null>(null);
@@ -106,7 +107,7 @@ export function Lobby({ meetId, initialRole = 'candidate', onJoin, onBack }: Lob
       stream.getTracks().forEach((track) => track.stop());
     }
     
-    onJoin(displayName.trim(), videoEnabled, audioEnabled, autoPilot, joinRole);
+    onJoin(displayName.trim(), videoEnabled, audioEnabled, autoPilot, joinRole, spokenLanguage);
   };
 
   return (
@@ -211,6 +212,32 @@ export function Lobby({ meetId, initialRole = 'candidate', onJoin, onBack }: Lob
                     required
                   />
                 </div>
+              </div>
+
+              {/* Spoken Language Dropdown Selection */}
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '8px', fontWeight: 500 }}>
+                  Spoken Language (Speech-to-Text)
+                </label>
+                <select
+                  value={spokenLanguage}
+                  onChange={(e) => setSpokenLanguage(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '10px 14px',
+                    background: 'rgba(0, 0, 0, 0.3)',
+                    border: '1px solid var(--glass-border)',
+                    borderRadius: '8px',
+                    color: '#fff',
+                    outline: 'none',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <option value="en-IN" style={{ background: '#1e293b' }}>English (India)</option>
+                  <option value="en-US" style={{ background: '#1e293b' }}>English (US)</option>
+                  <option value="ta-IN" style={{ background: '#1e293b' }}>Tamil (தமிழ்)</option>
+                  <option value="hi-IN" style={{ background: '#1e293b' }}>Hindi (हिन्दी)</option>
+                </select>
               </div>
 
               {/* Role Selection Segmented Toggles */}

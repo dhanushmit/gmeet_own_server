@@ -14,6 +14,7 @@ interface MeetingRoomProps {
   initialAudio: boolean;
   autoPilot: boolean;
   role: 'admin' | 'candidate';
+  spokenLanguage?: string;
   onLeave: () => void;
 }
 
@@ -51,7 +52,7 @@ function RemoteVideo({ stream }: RemoteVideoProps) {
   );
 }
 
-export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, autoPilot, role, onLeave }: MeetingRoomProps) {
+export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, autoPilot, role, spokenLanguage = 'en-IN', onLeave }: MeetingRoomProps) {
   // Call States
   const [videoEnabled, setVideoEnabled] = useState(initialVideo);
   const [audioEnabled, setAudioEnabled] = useState(initialAudio);
@@ -319,6 +320,7 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
       console.warn("Speech Recognition API not supported in this browser.");
+      addSystemMessage("Speech capture unavailable: Your browser/device does not support the Web Speech API. Please use Google Chrome or Safari for active speech transcription.");
       return;
     }
 
@@ -326,9 +328,8 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
     rec.continuous = true;
     rec.interimResults = false;
     
-    // Support en-IN to optimize capturing Indian English accents with maximum accuracy, fallback to navigator.language
-    const userLang = navigator.language || 'en-IN';
-    rec.lang = userLang.startsWith('en') ? 'en-IN' : userLang;
+    // Set speech recognition language based on lobby preference
+    rec.lang = spokenLanguage;
 
     rec.onresult = (event: any) => {
       // Loop through all new results to ensure no speech chunks are lost (solves empty/skipped chunks)
@@ -433,7 +434,7 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
         } catch (e) {}
       }
     };
-  }, [isAdmitted, localStream, audioEnabled]);
+  }, [isAdmitted, localStream, audioEnabled, spokenLanguage]);
 
   // Auto-start recording on admin join
   useEffect(() => {

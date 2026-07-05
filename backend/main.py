@@ -2,12 +2,56 @@ import os
 import shutil
 import uuid
 import json
+import sys
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from database import init_db, get_db_connection
 from pdf_generator import generate_transcript_pdf
+
+# Configure local directory in PATH so subprocesses can locate local ffmpeg/ffprobe binaries
+backend_dir = os.path.dirname(os.path.abspath(__file__))
+os.environ["PATH"] = backend_dir + os.pathsep + os.environ.get("PATH", "")
+
+def download_static_ffmpeg():
+    """
+    Downloads static ffmpeg/ffprobe binaries dynamically on Linux (Render) if not present in system PATH.
+    Ensures server-side Whisper transcription runs successfully.
+    """
+    if sys.platform.startswith("linux") and not shutil.which("ffmpeg"):
+        ffmpeg_path = os.path.join(backend_dir, "ffmpeg")
+        if not os.path.exists(ffmpeg_path):
+            print("ffmpeg not found in PATH. Downloading static binary for Render...")
+            try:
+                import urllib.request
+                import tarfile
+                
+                url = "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
+                tar_path = os.path.join(backend_dir, "ffmpeg.tar.xz")
+                
+                # Download static tarball
+                urllib.request.urlretrieve(url, tar_path)
+                
+                # Extract only ffmpeg and ffprobe directly into the backend directory
+                with tarfile.open(tar_path, "r:xz") as tar:
+                    for member in tar.getmembers():
+                        if member.name.endswith("/ffmpeg") or member.name.endswith("/ffprobe"):
+                            member.name = os.path.basename(member.name)
+                            tar.extract(member, backend_dir)
+                
+                # Set executable permissions
+                os.chmod(os.path.join(backend_dir, "ffmpeg"), 0o755)
+                os.chmod(os.path.join(backend_dir, "ffprobe"), 0o755)
+                
+                # Clean up downloaded archive
+                os.remove(tar_path)
+                print("Static ffmpeg and ffprobe downloaded and configured successfully.")
+            except Exception as e:
+                print(f"Error downloading static ffmpeg: {e}")
+
+# Run dynamic dependency installer
+download_static_ffmpeg()
 
 # Initialize database on startup
 init_db()

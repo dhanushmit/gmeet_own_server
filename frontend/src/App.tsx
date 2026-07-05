@@ -26,6 +26,7 @@ function App() {
   const [audioEnabled, setAudioEnabled] = useState<boolean>(true);
   const [autoPilot, setAutoPilot] = useState<boolean>(false);
   const [role, setRole] = useState<'admin' | 'candidate'>('candidate');
+  const [spokenLanguage, setSpokenLanguage] = useState<string>('en-IN');
 
   // Sync state if URL changes or we load page
   useEffect(() => {
@@ -42,12 +43,13 @@ function App() {
     window.history.pushState({}, '', `/?join=${meetId}`);
   };
 
-  const handleLobbyJoin = (name: string, video: boolean, audio: boolean, auto: boolean, selectedRole: 'admin' | 'candidate') => {
+  const handleLobbyJoin = (name: string, video: boolean, audio: boolean, auto: boolean, selectedRole: 'admin' | 'candidate', spokenLang: string) => {
     setDisplayName(name);
     setVideoEnabled(video);
     setAudioEnabled(audio);
     setAutoPilot(auto);
     setRole(selectedRole);
+    setSpokenLanguage(spokenLang);
     setView('room');
   };
 
@@ -85,6 +87,7 @@ function App() {
           initialAudio={audioEnabled} 
           autoPilot={autoPilot}
           role={role}
+          spokenLanguage={spokenLanguage}
           onLeave={handleLeaveRoom} 
         />
       )}
