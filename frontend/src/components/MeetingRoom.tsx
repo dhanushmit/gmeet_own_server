@@ -374,9 +374,24 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
 
             addTranscriptLine(displayName, transcriptText, undefined, avgVol, speechRate);
 
-            // Broadcast to peer
+            // Append locally to chat box messages as a Live Caption
+            const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: Math.random().toString(),
+                sender: displayName,
+                text: `[Live Caption] ${transcriptText}`,
+                timestamp: timeStr,
+                type: 'user'
+              }
+            ]);
+
+            // Broadcast both transcript-chunk and chat-message to all peers
             if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
               const elapsed = joinTimeRef.current ? Math.floor((Date.now() - joinTimeRef.current) / 1000) : 0;
+              
+              // 1. Send transcription segment
               wsRef.current.send(JSON.stringify({
                 type: 'transcript-chunk',
                 text: transcriptText,
@@ -384,6 +399,14 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
                 elapsed_seconds: elapsed,
                 average_volume: avgVol,
                 speech_rate: speechRate
+              }));
+
+              // 2. Send live caption chat message
+              wsRef.current.send(JSON.stringify({
+                type: 'chat-message',
+                sender: displayName,
+                text: `[Live Caption] ${transcriptText}`,
+                timestamp: timeStr
               }));
             }
           }
@@ -1380,7 +1403,15 @@ export function MeetingRoom({ meetId, displayName, initialVideo, initialAudio, a
           <div className="chat-messages">
             {messages.map((msg) => (
               <div key={msg.id} className={`chat-message ${msg.type}`}>
-                <div className="msg-bubble">
+                <div 
+                  className="msg-bubble"
+                  style={msg.text.startsWith('[Live Caption]') ? {
+                    background: 'rgba(99, 102, 241, 0.12)',
+                    border: '1px dashed rgba(99, 102, 241, 0.4)',
+                    color: '#e2e8f0',
+                    fontStyle: 'italic'
+                  } : {}}
+                >
                   {msg.text}
                 </div>
                 <div className="msg-meta">
